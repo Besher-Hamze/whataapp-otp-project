@@ -12,6 +12,11 @@ export class AccountsController {
     return this.accountsService.create(createAccountDto);
   }
 
+  @Get('user/:userId')
+  findAllByUser(@Param('userId') userId: string) {
+    return this.accountsService.findAccountsByUser(userId);
+  }
+  
   @Get()
   findAll() {
     return this.accountsService.findAllAccounts();

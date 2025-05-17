@@ -78,4 +78,18 @@ export class AccountsService {
       throw new NotFoundException(`Account with ID "${id}" not found`);
     }
   }
+  async findAccountsByUser(userId: string): Promise<AccountDocument[]> {
+    try {
+      const accounts = await this.accountModel.find({ user: userId }).exec();
+      if (!accounts || accounts.length === 0) {
+        throw new NotFoundException(`No accounts found for user "${userId}"`);
+      }
+      return accounts;
+    } catch (error) {
+      if (error.name === 'CastError') {
+        throw new NotFoundException(`Invalid user ID "${userId}"`);
+      }
+      throw error;
+    }
+  }
 }

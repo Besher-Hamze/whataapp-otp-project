@@ -13,3 +13,4 @@ dist/
 
 # Authentication or sensitive config folder
 .wwebjs_auth/
+.wwebjs_cache

@@ -29,9 +29,14 @@ async function bootstrap() {
   });
   
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-  await app.listen(process.env.PORT ?? 3004 ,()=>{
-    console.log("App Started on : http://localhost:3001");
+  // await app.listen(process.env.PORT ?? 3004 ,()=>{
+  //   console.log("App Started on : http://localhost:3001");
     
-  });
+  // });
+
+  await app.listen(3000, '0.0.0.0' , ()=> {
+        console.log("App Started on : http://localhost:3000");
+  }); // Listen on all interfaces
 }
+
 bootstrap();

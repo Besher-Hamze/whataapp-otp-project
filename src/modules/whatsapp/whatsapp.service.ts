@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Client, LocalAuth } from 'whatsapp-web.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
+import * as QRCode from 'qrcode';
 
 @Injectable()
 export class WhatsAppService {
@@ -20,9 +21,26 @@ export class WhatsAppService {
       puppeteer: { headless: true, args: ['--no-sandbox'] },
     });
 
-    client.on('qr', (qr) => {
+    client.on('qr', async (qr) => {
       console.log(`[${clientId}] QR code ready. Please scan:`);
-      qrcodeTerminal.generate(qr, { small: true });
+      qrcodeTerminal.generate(qr, { small: true }); // Still show in terminal
+
+      // Define the path to save the QR code image
+      const qrImagePath = path.join(__dirname, '..', 'qrcodes', `${clientId}_qr.png`);
+      const dir = path.dirname(qrImagePath);
+
+      // Create directory if it doesn't exist
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      // Generate and save QR code as an image
+      try {
+        await QRCode.toFile(qrImagePath, qr);
+        console.log(`[${clientId}] QR code saved as image at ${qrImagePath}`);
+      } catch (err) {
+        console.error(`[${clientId}] Failed to save QR code image:`, err);
+      }
     });
 
     client.on('authenticated', () => {
@@ -43,6 +61,7 @@ export class WhatsAppService {
 
     return {
       message: 'Session started. Scan QR to authenticate',
+      qrImagePath: path.join('qrcodes', `${clientId}_qr.png`), // Return path for API use
     };
   }
 

@@ -8,6 +8,7 @@ import { User, UserSchema } from '../users/schema/users.schema';
 
 import { AccountsModule } from '../accounts/accounts.module';
 import { UsersModule } from '../users/users.module';
+import { WhatsAppGateway } from './whatsapp.gateway';
 
 
 @Module({
@@ -20,6 +21,6 @@ import { UsersModule } from '../users/users.module';
     AccountsModule,
   ],
   controllers: [WhatsAppController],
-  providers: [WhatsAppService],
+  providers: [WhatsAppGateway, WhatsAppService],
 })
 export class WhatsappModule {}

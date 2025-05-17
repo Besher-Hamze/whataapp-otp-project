@@ -4,117 +4,79 @@ import * as fs from 'fs';
 import { Client, LocalAuth } from 'whatsapp-web.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
 import * as QRCode from 'qrcode';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class WhatsAppService {
   private clients: Map<string, Client> = new Map();
+  private socketClientMap: Map<string, string> = new Map(); // Maps socket clientId to WhatsApp clientId
 
-  async startSession(clientId: string) {
-    const sessionName = `${clientId}`;
+  async startSession(socketClientId: string, emit: (event: string, data: any) => void) {
+    // Generate a unique clientId for the WhatsApp session
+    const clientId = uuidv4();
+    this.socketClientMap.set(socketClientId, clientId);
 
     if (this.clients.has(clientId)) {
-      return { message: 'Session already started' };
+      emit('error', { message: 'Session already started' });
+      return { clientId };
     }
 
     const client = new Client({
-      authStrategy: new LocalAuth({ clientId: sessionName }),
+      authStrategy: new LocalAuth({ clientId }),
       puppeteer: { headless: true, args: ['--no-sandbox'] },
     });
 
     client.on('qr', async (qr) => {
       console.log(`[${clientId}] QR code ready. Please scan:`);
-      qrcodeTerminal.generate(qr, { small: true }); // Still show in terminal
+      qrcodeTerminal.generate(qr, { small: true });
 
-      // Define the path to save the QR code image
-      const qrImagePath = path.join(__dirname, '..', 'qrcodes', `${clientId}_qr.png`);
-      const dir = path.dirname(qrImagePath);
-
-      // Create directory if it doesn't exist
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      // Generate and save QR code as an image
       try {
-        await QRCode.toFile(qrImagePath, qr);
-        console.log(`[${clientId}] QR code saved as image at ${qrImagePath}`);
+        const qrDataUrl = await QRCode.toDataURL(qr); // Generate base64 QR code
+        emit('qr', { clientId, qr: qrDataUrl });
       } catch (err) {
-        console.error(`[${clientId}] Failed to save QR code image:`, err);
+        console.error(`[${clientId}] Failed to generate QR code:`, err);
+        emit('error', { message: 'Failed to generate QR code' });
       }
     });
 
     client.on('authenticated', () => {
       console.log(`[${clientId}] Authenticated`);
+      emit('authenticated', { clientId });
     });
 
     client.on('ready', () => {
       console.log(`[${clientId}] WhatsApp ready`);
+      emit('ready', { clientId });
     });
 
     client.on('disconnected', () => {
       console.log(`[${clientId}] Disconnected`);
       this.clients.delete(clientId);
+      this.socketClientMap.delete(socketClientId);
+      emit('disconnected', { clientId });
     });
 
     await client.initialize();
     this.clients.set(clientId, client);
 
-    return {
-      message: 'Session started. Scan QR to authenticate',
-      qrImagePath: path.join('qrcodes', `${clientId}_qr.png`), // Return path for API use
-    };
+    return { clientId };
   }
-
-  async sendMessage(clientId: string, to: string, message: string) {
-    const sessionName = `${clientId}`;
+  async sendMessage(socketClientId: string, clientId: string, to: string, message: string) {
+    const storedClientId = this.socketClientMap.get(socketClientId);
+    if (!storedClientId || storedClientId !== clientId) {
+      throw new HttpException('Invalid or unauthorized session', HttpStatus.UNAUTHORIZED);
+    }
 
     let client = this.clients.get(clientId);
 
-    // 🟡 If client not running, try starting
     if (!client) {
-      console.log(`[${clientId}] No session. Initializing...`);
-
-      client = new Client({
-        authStrategy: new LocalAuth({ clientId: sessionName }),
-        puppeteer: { headless: true, args: ['--no-sandbox'] },
-      });
-
-      client.on('qr', (qr) => {
-        console.log(`[${clientId}] QR ready`);
-        qrcodeTerminal.generate(qr, { small: true });
-      });
-
-      client.on('authenticated', () => {
-        console.log(`[${clientId}] Authenticated`);
-      });
-
-      client.on('ready', () => {
-        console.log(`[${clientId}] WhatsApp ready`);
-      });
-
-      client.on('disconnected', () => {
-        console.log(`[${clientId}] Disconnected`);
-        this.clients.delete(clientId);
-      });
-
-      await client.initialize();
-
-      // ✅ Wait until WhatsApp is really ready
-      await new Promise<void>((resolve) => {
-        client!.once('ready', () => resolve());
-      });
-
-      this.clients.set(clientId, client);
+      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
     }
 
     try {
       const chatId = to.includes('@') ? to : `${to}@c.us`;
-
-      // ✅ Slight delay still helps stabilize Puppeteer internal script
       await new Promise((resolve) => setTimeout(resolve, 1000));
-
       await client.sendMessage(chatId, message);
-
       return { message: 'Message sent successfully' };
     } catch (err) {
       console.error(`[${clientId}] Error sending message:`, err);
@@ -122,6 +84,18 @@ export class WhatsAppService {
         `Failed to send message: ${err.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+  }
+
+  disconnectClient(socketClientId: string) {
+    const clientId = this.socketClientMap.get(socketClientId);
+    if (clientId) {
+      const client = this.clients.get(clientId);
+      if (client) {
+        client.destroy();
+        this.clients.delete(clientId);
+      }
+      this.socketClientMap.delete(socketClientId);
     }
   }
 
@@ -133,3 +107,5 @@ export class WhatsAppService {
     return Array.from(this.clients.keys());
   }
 }
+
+

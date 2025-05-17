@@ -5,14 +5,22 @@ import { Client, LocalAuth } from 'whatsapp-web.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
 import * as QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
+import { InjectModel } from '@nestjs/mongoose';
+import { Account, AccountDocument } from '../accounts/schema/account.schema';
+import { Model } from 'mongoose';
 
 @Injectable()
 export class WhatsAppService {
+  constructor(
+    @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
+  ) {}
   private clients: Map<string, Client> = new Map();
   private socketClientMap: Map<string, string> = new Map(); // Maps socket clientId to WhatsApp clientId
 
-  async startSession(socketClientId: string, emit: (event: string, data: any) => void) {
-    // Generate a unique clientId for the WhatsApp session
+  async startSession(
+    socketClientId: string,
+    emit: (event: string, data: any) => void,
+  ) {
     const clientId = uuidv4();
     this.socketClientMap.set(socketClientId, clientId);
 
@@ -27,30 +35,35 @@ export class WhatsAppService {
     });
 
     client.on('qr', async (qr) => {
-      console.log(`[${clientId}] QR code ready. Please scan:`);
-      qrcodeTerminal.generate(qr, { small: true });
-
-      try {
-        const qrDataUrl = await QRCode.toDataURL(qr); // Generate base64 QR code
-        emit('qr', { clientId, qr: qrDataUrl });
-      } catch (err) {
-        console.error(`[${clientId}] Failed to generate QR code:`, err);
-        emit('error', { message: 'Failed to generate QR code' });
-      }
+      const qrDataUrl = await QRCode.toDataURL(qr);
+      emit('qr', { clientId, qr: qrDataUrl });
     });
 
     client.on('authenticated', () => {
-      console.log(`[${clientId}] Authenticated`);
       emit('authenticated', { clientId });
     });
 
-    client.on('ready', () => {
-      console.log(`[${clientId}] WhatsApp ready`);
-      emit('ready', { clientId });
+    client.on('ready', async () => {
+      const userInfo = client.info; // Contains the authenticated user's info
+      const phoneNumber = userInfo?.wid?.user; // e.g., '1234567890'
+      const name = userInfo?.pushname || 'Unknown';
+
+      // Save account to DB
+      await this.accountModel.create({
+        name,
+        phone_number: phoneNumber,
+        user: null, // Add actual user ID if applicable
+      });
+
+      emit('ready', {
+        clientId,
+        phoneNumber,
+        name,
+        message: 'WhatsApp client ready and account saved.',
+      });
     });
 
     client.on('disconnected', () => {
-      console.log(`[${clientId}] Disconnected`);
       this.clients.delete(clientId);
       this.socketClientMap.delete(socketClientId);
       emit('disconnected', { clientId });
@@ -61,16 +74,28 @@ export class WhatsAppService {
 
     return { clientId };
   }
-  async sendMessage(socketClientId: string, clientId: string, to: string, message: string) {
+
+  async sendMessage(
+    socketClientId: string,
+    clientId: string,
+    to: string,
+    message: string,
+  ) {
     const storedClientId = this.socketClientMap.get(socketClientId);
     if (!storedClientId || storedClientId !== clientId) {
-      throw new HttpException('Invalid or unauthorized session', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Invalid or unauthorized session',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
     let client = this.clients.get(clientId);
 
     if (!client) {
-      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
+      throw new HttpException(
+        'Session not found. Please start a new session.',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     try {
@@ -107,5 +132,3 @@ export class WhatsAppService {
     return Array.from(this.clients.keys());
   }
 }
-
-

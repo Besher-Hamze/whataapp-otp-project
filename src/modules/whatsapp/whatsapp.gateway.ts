@@ -3,7 +3,10 @@ import { Server, Socket } from 'socket.io';
 import { WhatsAppService } from './whatsapp.service';
 import { Logger } from '@nestjs/common';
 
-@WebSocketGateway({ cors: { origin: '*' , path: '/whatsapp/start'} })
+@WebSocketGateway({
+  cors: { origin: '*' },
+  path: '/whatsapp/start',
+})
 export class WhatsAppGateway {
   @WebSocketServer() server: Server
   private logger: Logger = new Logger('WhatsAppGateway');
@@ -28,7 +31,7 @@ export class WhatsAppGateway {
     }
   }
 
-  @SubscribeMessage('start-session')
+  @SubscribeMessage('init')
   async handleStartSession(client: Socket) {
     this.logger.log(`Starting WhatsApp session for client: ${client.id}`);
     const { clientId } = await this.whatsappService.startSession(client.id, (event, data) => {

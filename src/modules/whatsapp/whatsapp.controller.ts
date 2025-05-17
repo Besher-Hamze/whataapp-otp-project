@@ -5,7 +5,7 @@ import { WhatsAppService } from './whatsapp.service';
 export class WhatsAppController {
   constructor(private readonly whatsappService: WhatsAppService) {}
 
-  @Post('start')
+  @Get('start')
   async startSession() {
     console.log("TTTTTTTTTTTTTTTTTTTT");
     // This is a placeholder to initiate the process; the actual session start will be via WebSocket

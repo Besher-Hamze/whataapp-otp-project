@@ -1,18 +1,29 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+} from '@nestjs/common';
 import { ContactsService } from './contacts.service';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
 import { GetUserId } from 'src/common/decorators/intex';
 
-@UseGuards(JwtGuard)
+// @UseGuards(JwtGuard)
 @Controller('contacts')
 export class ContactsController {
-  
   constructor(private readonly contactsService: ContactsService) {}
 
   @Post()
-  create(@Body() createContactDto: CreateContactDto , @GetUserId() userId: string) {
+  create(
+    @Body() createContactDto: CreateContactDto,
+    @GetUserId() userId: string,
+  ) {
     return this.contactsService.create(createContactDto);
   }
 
@@ -25,6 +36,11 @@ export class ContactsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.contactsService.findContactById(id);
+  }
+
+  @Get('account/:accountId')
+  findByAccount(@Param('accountId') accountId: string) {
+    return this.contactsService.findByAccountId(accountId);
   }
 
   @Patch(':id')

@@ -2,48 +2,82 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { Group } from './schema/groups.schema';
-import { Model } from 'mongoose';
+import { Model, Types, HydratedDocument } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { PhoneService } from '../phone/phone.service';
+import { ContactsService } from '../contacts/contacts.service';
+import { Contact } from '../contacts/schema/contacts.schema';
 
 @Injectable()
 export class GroupsService {
   constructor(
     @InjectModel(Group.name) private groupModel: Model<Group>,
     private readonly phoneService: PhoneService,
+    private readonly contactsService: ContactsService,
   ) {}
+
   async create(createGroupDto: CreateGroupDto) {
-    const newGroup = await this.groupModel.create({
+    const contactIds: Types.ObjectId[] = [];
+
+    for (const contact of createGroupDto.phone_numbers) {
+      const { phone_number, name } = contact;
+
+      let existingContact =
+        await this.contactsService.findByPhoneNumber(phone_number);
+
+      // create if not exist
+      if (!existingContact) {
+        existingContact = await this.contactsService.create({
+          name,
+          phone_number,
+          account: createGroupDto.account,
+        });
+      }
+
+      // 👇 tell TypeScript: we guarantee it exists now
+      contactIds.push((existingContact as any)._id); // ✅ safest with no TS complaints
+
+      const existsInPhone = await this.phoneService.findByNumber(phone_number);
+      if (!existsInPhone) {
+        await this.phoneService.create({ number: phone_number });
+      }
+    }
+
+    const groupDoc = new this.groupModel({
       name: createGroupDto.name,
-      phone_numbers: createGroupDto.phone_numbers,
-      account: createGroupDto.account, // ✅ ADD THIS
+      contacts: contactIds,
+      account: createGroupDto.account,
       created_at: new Date(),
       updated_at: new Date(),
     });
 
-    for (const number of createGroupDto.phone_numbers) {
-      // Optionally avoid duplicates
-      const exists = await this.phoneService.findByNumber(number);
+    const newGroup: HydratedDocument<Group> = await groupDoc.save();
 
-      if (!exists) {
-        await this.phoneService.create({ number });
-      }
-    }
+    const groupId = newGroup._id?.toString(); // force extract safely
+    await this.contactsService.addGroupToContacts(
+      contactIds,
+      new Types.ObjectId(groupId),
+    );
+
     return newGroup;
   }
 
   async findAllGroups(): Promise<Group[]> {
-    return this.groupModel.find().exec();
+    return this.groupModel.find().populate('contacts').exec();
   }
 
   async findGroupById(id: string): Promise<Group | null> {
-    // Changed parameter name to id
     try {
-      const Group = await this.groupModel.findById(id).exec(); // Use findById
-      if (!Group) {
+      const group = await this.groupModel
+        .findById(id)
+        .populate('contacts')
+        .exec();
+
+      if (!group) {
         throw new NotFoundException(`Group with ID "${id}" not found`);
       }
-      return Group;
+
+      return group;
     } catch (error) {
       if (error.name === 'CastError') {
         throw new NotFoundException(`Invalid Group ID "${id}"`);
@@ -52,38 +86,44 @@ export class GroupsService {
     }
   }
 
-  async findGroupByEmail(email: string): Promise<Group | null> {
-    return this.groupModel.findOne({ email }).exec();
-  }
-
   async updateGroup(
     id: string,
     updateGroupDto: UpdateGroupDto,
   ): Promise<Group | null> {
-    // Changed parameter name to id
-    // Check if the Group exists
-    const existingGroup = await this.groupModel.findById(id).exec(); // Use findById
+    const existingGroup = await this.groupModel.findById(id);
     if (!existingGroup) {
       throw new NotFoundException(`Group with ID "${id}" not found`);
     }
 
-    const updatedGroup = await this.groupModel
-      .findByIdAndUpdate(
-        // Use findByIdAndUpdate
-        id,
-        {
-          ...updateGroupDto,
-          updated_at: new Date(),
-        },
-        { new: true },
-      )
+    return this.groupModel.findByIdAndUpdate(
+      id,
+      {
+        ...updateGroupDto,
+        updated_at: new Date(),
+      },
+      { new: true },
+    );
+  }
+
+  async findByAccountId(accountId: string): Promise<any[]> {
+    const groups = await this.groupModel
+      .find({ account: accountId })
+      .populate('contacts')
       .exec();
-    return updatedGroup;
+
+    // Optional: Transform contacts
+    return groups.map((group) => ({
+      _id: group._id,
+      name: group.name,
+      contacts: group.contacts.map((contact: any) => ({
+        name: contact.name,
+        phonenum: contact.phone_number,
+      })),
+    }));
   }
 
   async deleteGroup(id: string): Promise<void> {
-    // Changed parameter name to id
-    const result = await this.groupModel.deleteOne({ _id: id }).exec(); // Use _id
+    const result = await this.groupModel.deleteOne({ _id: id });
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Group with ID "${id}" not found`);
     }

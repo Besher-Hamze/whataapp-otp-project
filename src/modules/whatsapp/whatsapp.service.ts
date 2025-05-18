@@ -45,7 +45,7 @@ export class WhatsAppService {
       );
       const qrDataUrl = await QRCode.toDataURL(qr);
 
-      emit('qr', { socketClientId, qr: qrDataUrl });
+      emit('qr', { clientId:socketClientId, qr: qrDataUrl });
 
       qrcodeTerminal.generate(qr, { small: true });
     });

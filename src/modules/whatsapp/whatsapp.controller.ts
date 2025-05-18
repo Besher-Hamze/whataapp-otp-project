@@ -1,11 +1,16 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, BadRequestException, UseGuards } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { Account, AccountDocument } from '../accounts/schema/account.schema';
+import { UserDocument } from '../users/schema/users.schema';
+import { JwtGuard } from 'src/common/guards/jwt.guard';
 
+
+// @UseGuards(JwtGuard)
 @Controller('whatsapp')
 export class WhatsAppController {
+  
   constructor(
     private readonly whatsappService: WhatsAppService,
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
@@ -67,3 +72,5 @@ export class WhatsAppController {
     return await this.accountModel.findById(id).lean();
   }
 }
+
+

@@ -4,25 +4,40 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { Group } from './schema/groups.schema';
 import { Model } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
+import { PhoneService } from '../phone/phone.service';
 
 @Injectable()
 export class GroupsService {
-constructor(@InjectModel(Group.name) private groupModel: Model<Group>) {}
+  constructor(
+    @InjectModel(Group.name) private groupModel: Model<Group>,
+    private readonly phoneService: PhoneService,
+  ) {}
   async create(createGroupDto: CreateGroupDto) {
     const newGroup = await this.groupModel.create({
       name: createGroupDto.name,
       phone_numbers: createGroupDto.phone_numbers,
+      account: createGroupDto.account, // ✅ ADD THIS
       created_at: new Date(),
       updated_at: new Date(),
     });
+
+    for (const number of createGroupDto.phone_numbers) {
+      // Optionally avoid duplicates
+      const exists = await this.phoneService.findByNumber(number);
+
+      if (!exists) {
+        await this.phoneService.create({ number });
+      }
+    }
     return newGroup;
   }
 
- async findAllGroups(): Promise<Group[]> {
+  async findAllGroups(): Promise<Group[]> {
     return this.groupModel.find().exec();
   }
 
-  async findGroupById(id: string): Promise<Group | null> { // Changed parameter name to id
+  async findGroupById(id: string): Promise<Group | null> {
+    // Changed parameter name to id
     try {
       const Group = await this.groupModel.findById(id).exec(); // Use findById
       if (!Group) {
@@ -30,10 +45,10 @@ constructor(@InjectModel(Group.name) private groupModel: Model<Group>) {}
       }
       return Group;
     } catch (error) {
-       if (error.name === 'CastError') {
-          throw new NotFoundException(`Invalid Group ID "${id}"`);
-       }
-       throw error;
+      if (error.name === 'CastError') {
+        throw new NotFoundException(`Invalid Group ID "${id}"`);
+      }
+      throw error;
     }
   }
 
@@ -41,15 +56,20 @@ constructor(@InjectModel(Group.name) private groupModel: Model<Group>) {}
     return this.groupModel.findOne({ email }).exec();
   }
 
-  async updateGroup(id: string, updateGroupDto: UpdateGroupDto): Promise<Group | null> { // Changed parameter name to id
+  async updateGroup(
+    id: string,
+    updateGroupDto: UpdateGroupDto,
+  ): Promise<Group | null> {
+    // Changed parameter name to id
     // Check if the Group exists
-    const existingGroup = await this.groupModel.findById(id).exec();  // Use findById
+    const existingGroup = await this.groupModel.findById(id).exec(); // Use findById
     if (!existingGroup) {
       throw new NotFoundException(`Group with ID "${id}" not found`);
     }
 
     const updatedGroup = await this.groupModel
-      .findByIdAndUpdate(  // Use findByIdAndUpdate
+      .findByIdAndUpdate(
+        // Use findByIdAndUpdate
         id,
         {
           ...updateGroupDto,
@@ -61,12 +81,11 @@ constructor(@InjectModel(Group.name) private groupModel: Model<Group>) {}
     return updatedGroup;
   }
 
-  async deleteGroup(id: string): Promise<void> { // Changed parameter name to id
+  async deleteGroup(id: string): Promise<void> {
+    // Changed parameter name to id
     const result = await this.groupModel.deleteOne({ _id: id }).exec(); // Use _id
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Group with ID "${id}" not found`);
     }
   }
 }
-
-

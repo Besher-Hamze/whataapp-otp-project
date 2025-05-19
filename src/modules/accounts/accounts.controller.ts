@@ -1,8 +1,11 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Put } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Put, UseGuards } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
+import { GetUserId } from 'src/common/decorators/intex';
+import { JwtGuard } from 'src/common/guards/jwt.guard';
 
+@UseGuards(JwtGuard)
 @Controller('accounts')
 export class AccountsController {
   constructor(private readonly accountsService: AccountsService) {}
@@ -12,9 +15,9 @@ export class AccountsController {
     return this.accountsService.create(createAccountDto);
   }
 
-  @Get('user/:userId')
-  findAllByUser(@Param('userId') userId: string) {
-    return this.accountsService.findAccountsByUser(userId);
+  @Get('get-available-accounts')
+  async getAccountsByUser(@GetUserId() userId: string) {
+    return await this.accountsService.findAccountsByUser(userId);
   }
   
   @Get()

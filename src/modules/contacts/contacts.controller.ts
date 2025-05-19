@@ -12,7 +12,7 @@ import { ContactsService } from './contacts.service';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
-import { GetUserId } from 'src/common/decorators/intex';
+import { GetUserId } from 'src/common/decorators';
 
 @UseGuards(JwtGuard)
 @Controller('contacts')

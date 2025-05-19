@@ -5,7 +5,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Account, AccountDocument } from '../accounts/schema/account.schema';
 import { UserDocument } from '../users/schema/users.schema';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
-import { GetWhatsappAccountId } from 'src/common/decorators/intex';
+import { GetWhatsappAccountId } from 'src/common/decorators';
 
 
 @UseGuards(JwtGuard)

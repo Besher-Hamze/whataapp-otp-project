@@ -22,7 +22,7 @@ export class AuthController {
 
   @Post('select-account')
   @UseGuards(JwtGuard)
-  async selectAccount(@Request() req, @Body('account_id') accountId: string) {
+  async selectAccount(@Request() req, @Body('accountId') accountId: string) {
     const userId = req.user.sub;
     return this.authService.selectAccount(userId, accountId);
   }

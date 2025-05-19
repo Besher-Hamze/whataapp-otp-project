@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { InjectModel } from '@nestjs/mongoose';
@@ -8,7 +8,7 @@ import { Model } from 'mongoose';
 @Injectable()
 export class AccountsService {
   constructor(@InjectModel(Account.name) private accountModel: Model<AccountDocument>) {}
-
+  private readonly logger = new Logger(AccountsService.name);
   async create(createAccountDto: CreateAccountDto & { user: string }) {
     const existingAccount = await this.accountModel.findOne({
       $or: [{ phone_number: createAccountDto.phone_number }],
@@ -79,11 +79,15 @@ export class AccountsService {
     }
   }
   async findAccountsByUser(userId: string): Promise<AccountDocument[]> {
+    this.logger.log(`Starting findAccountsByUser for userId: ${userId}`);
     try {
+      this.logger.debug(`Querying accounts for userId: ${userId}`);
       const accounts = await this.accountModel.find({ user: userId }).exec();
       if (!accounts || accounts.length === 0) {
+        this.logger.warn(`No accounts found for userId: ${userId}`);
         throw new NotFoundException(`No accounts found for user "${userId}"`);
       }
+      this.logger.log(`Found ${accounts.length} account(s) for userId: ${userId}`);
       return accounts;
     } catch (error) {
       if (error.name === 'CastError') {

@@ -14,7 +14,7 @@ import { UpdateContactDto } from './dto/update-contact.dto';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
 import { GetUserId } from 'src/common/decorators/intex';
 
-// @UseGuards(JwtGuard)
+@UseGuards(JwtGuard)
 @Controller('contacts')
 export class ContactsController {
   constructor(private readonly contactsService: ContactsService) {}

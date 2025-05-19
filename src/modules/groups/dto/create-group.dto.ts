@@ -3,10 +3,11 @@ import {
   IsNotEmpty,
   IsArray,
   ArrayNotEmpty,
-  Matches,
   IsMongoId,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ContactInGroupDto } from './contact-in-group.dto'; // ✅ use new DTO
 
 export class CreateGroupDto {
   @IsString()
@@ -15,13 +16,9 @@ export class CreateGroupDto {
 
   @IsArray()
   @ArrayNotEmpty()
-  @IsString({ each: true })
-  @Matches(/^\+\d+$/, {
-    each: true,
-    message: 'Each phone number must start with + and contain digits only.',
-  })
-  @Type(() => String)
-  phone_numbers: string[];
+  @ValidateNested({ each: true })
+  @Type(() => ContactInGroupDto) // ✅ replace CreateContactDto
+  phone_numbers: ContactInGroupDto[];
 
   @IsMongoId()
   @IsNotEmpty()

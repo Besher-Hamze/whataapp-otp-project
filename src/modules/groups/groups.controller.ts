@@ -39,4 +39,9 @@ export class GroupsController {
   remove(@Param('id') id: string) {
     return this.groupsService.deleteGroup(id);
   }
+
+  @Get('account/:accountId')
+  findByAccount(@Param('accountId') accountId: string) {
+    return this.groupsService.findByAccountId(accountId);
+  }
 }

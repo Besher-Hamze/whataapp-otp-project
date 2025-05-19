@@ -6,6 +6,7 @@ import { Token, TokenSchema } from './schema/refresh-token.schema';
 import { UsersModule } from '../users/users.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JwtModule } from '@nestjs/jwt';
+import { JwtStrategy } from 'src/common/jwt/jwt.strategy';
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { JwtModule } from '@nestjs/jwt';
     UsersModule,
     AccountsModule,
   ],
-  providers: [AuthService],
+  providers: [AuthService, JwtStrategy],
   controllers: [AuthController],
   exports: [AuthService],
 })

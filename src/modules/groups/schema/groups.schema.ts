@@ -1,21 +1,22 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types, Schema as MongooseSchema } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
-@Schema({
-  timestamps: {
-    createdAt: 'created_at',
-    updatedAt: 'updated_at',
-  },
-})
+@Schema()
 export class Group extends Document {
   @Prop({ required: true })
   name: string;
 
-  @Prop({ type: [String], required: true, default: [] })
-  phone_numbers: string[];
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Contact' }] })
+  contacts: Types.ObjectId[];
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // or Account
   account: Types.ObjectId;
+
+  @Prop()
+  created_at: Date;
+
+  @Prop()
+  updated_at: Date;
 }
 
 export const GroupSchema = SchemaFactory.createForClass(Group);

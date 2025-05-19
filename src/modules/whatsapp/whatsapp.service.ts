@@ -18,93 +18,99 @@ export class WhatsAppService {
   private clients: Map<string, Client> = new Map();
   private socketClientMap: Map<string, string> = new Map();
 
-  async startSession(
-    socketClientId: string,
-    emit: (event: string, data: any) => void,
-  ) {
-    const clientId = uuidv4();
-    console.log(
-      `[${clientId}] 🟢 Starting new WhatsApp session for socket: ${socketClientId}`,
-    );
-    this.socketClientMap.set(socketClientId, clientId);
+async startSession(socketClientId: string, userId : string ,emit: (event: string, data: any) => void) {
+  // Check if a session already exists for this socket
+  if (this.socketClientMap.has(socketClientId)) {
+    const existingClientId = this.socketClientMap.get(socketClientId);
+    console.warn(`[${existingClientId}] ⚠️ Session already exists for socket: ${socketClientId}`);
+    emit('error', { message: 'Session already started', clientId: existingClientId });
+    return { clientId: existingClientId };
+  }
 
-    if (this.clients.has(clientId)) {
-      console.warn(`[${clientId}] ⚠️ Session already exists`);
-      emit('error', { message: 'Session already started' });
-      return { clientId };
-    }
+  const clientId = uuidv4();
+  console.log(`[${clientId}] 🟢 Starting new WhatsApp session for socket: ${socketClientId}`);
+  this.socketClientMap.set(socketClientId, clientId);
 
-    const client = new Client({
-      authStrategy: new LocalAuth({ clientId }),
-      puppeteer: { headless: true, args: ['--no-sandbox'] },
-    });
-
-    client.on('qr', async (qr) => {
-      console.log(
-        `[${clientId}] 🧾 QR Code received — showing in terminal and sending to frontend`,
-      );
-      const qrDataUrl = await QRCode.toDataURL(qr);
-
-      emit('qr', { clientId:socketClientId, qr: qrDataUrl });
-
-      qrcodeTerminal.generate(qr, { small: true });
-    });
-
-    client.on('authenticated', () => {
-      console.log(`[${clientId}] 🔐 Authenticated with WhatsApp`);
-      emit('authenticated', { clientId });
-    });
-
-    console.log(`[${clientId}] ✅ Setting up WhatsApp client events`);
-
-    client.on('ready', async () => {
-      console.log(`[${clientId}] 🔔 WhatsApp client is ready`);
-
-      const userInfo = client.info;
-      const phoneNumber = userInfo?.wid?.user || 'Unknown';
-      const name = userInfo?.pushname || 'Unknown';
-
-      console.log(`[${clientId}] 👤 Logged in as: ${name} (${phoneNumber})`);
-
-      try {
-        console.log(`[${clientId}] 💾 Saving account to database`);
-        await this.accountModel.create({
-          name,
-          phone_number: phoneNumber,
-          user: null,
-        });
-        console.log(`[${clientId}] ✅ Account saved to DB`);
-
-        console.log(`[${clientId}] 📤 Emitting "ready" event to frontend`);
-        emit('ready', {
-          phoneNumber,
-          name,
-          message: 'WhatsApp client ready and account saved.',
-        });
-      } catch (err) {
-        console.error(`[${clientId}] ❌ Failed to save account to DB:`, err);
-        emit('error', {
-          message: 'Failed to save account to DB.',
-          details: err.message,
-        });
-      }
-    });
-
-    client.on('disconnected', (reason) => {
-      console.warn(`[${clientId}] 🔌 Disconnected: ${reason}`);
-      this.clients.delete(clientId);
-      this.socketClientMap.delete(socketClientId);
-      emit('disconnected', { clientId });
-    });
-
-    console.log(`[${clientId}] ⚙️ Initializing WhatsApp client...`);
-    await client.initialize();
-    console.log(`[${clientId}] ✅ Client initialized and session started`);
-
-    this.clients.set(clientId, client);
-
+  // Double-check if client already exists (race condition prevention)
+  if (this.clients.has(clientId)) {
+    console.warn(`[${clientId}] ⚠️ Client already exists`);
+    emit('error', { message: 'Session already started', clientId });
     return { clientId };
   }
+
+  const client = new Client({
+    authStrategy: new LocalAuth({ clientId }),
+    puppeteer: { headless: true, args: ['--no-sandbox'] },
+  });
+
+  client.on('qr', async (qr) => {
+    console.log(`[${clientId}] 🧾 QR Code received — sending to frontend`);
+    try {
+      const qrDataUrl = await QRCode.toDataURL(qr);
+      qrcodeTerminal.generate(qr, { small: true });
+      emit('qr', { clientId, qr: qrDataUrl });
+    } catch (err) {
+      console.error(`[${clientId}] ❌ Failed to generate QR code:`, err);
+      emit('error', { message: 'Failed to generate QR code', details: err.message });
+    }
+  });
+
+  client.on('authenticated', () => {
+    console.log(`[${clientId}] 🔐 Authenticated with WhatsApp`);
+    emit('authenticated', { clientId });
+  });
+
+  client.on('ready', async () => {
+    console.log(`[${clientId}] 🔔 WhatsApp client is ready`);
+    const userInfo = client.info;
+    const phoneNumber = userInfo?.wid?.user || 'Unknown';
+    const name = userInfo?.pushname || 'Unknown';
+
+    console.log(`[${clientId}] 👤 Logged in as: ${name} (${phoneNumber})`);
+
+    try {
+      console.log(`[${clientId}] 💾 Saving account to database`);
+      await this.accountModel.create({
+        name,
+        phone_number: phoneNumber,
+        user: userId,
+      });
+      console.log(`[${clientId}] ✅ Account saved to DB`);
+      emit('ready', {
+        phoneNumber,
+        name,
+        message: 'WhatsApp client ready and account saved.',
+      });
+    } catch (err) {
+      console.error(`[${clientId}] ❌ Failed to save account to DB:`, err);
+      emit('error', {
+        message: 'Failed to save account to DB.',
+        details: err.message,
+      });
+    }
+  });
+
+  client.on('disconnected', (reason) => {
+    console.warn(`[${clientId}] 🔌 Disconnected: ${reason}`);
+    this.clients.delete(clientId);
+    this.socketClientMap.delete(socketClientId);
+    emit('disconnected', { clientId, reason });
+  });
+
+  console.log(`[${clientId}] ⚙️ Initializing WhatsApp client...`);
+  try {
+    await client.initialize();
+    console.log(`[${clientId}] ✅ Client initialized and session started`);
+    this.clients.set(clientId, client);
+  } catch (err) {
+    console.error(`[${clientId}] ❌ Failed to initialize client:`, err);
+    this.clients.delete(clientId);
+    this.socketClientMap.delete(socketClientId);
+    emit('error', { message: 'Failed to initialize WhatsApp client', details: err.message });
+  }
+
+  return { clientId };
+}
 
   async sendMessage(
     socketClientId: string,

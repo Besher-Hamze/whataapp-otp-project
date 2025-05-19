@@ -42,50 +42,59 @@ export class WhatsAppGateway
     }, 3000);
   }
 
-  @SubscribeMessage('init')
-  async handleStartSession(client: Socket) {
-    this.logger.log(`Starting WhatsApp session for client: ${client.id}`);
+@SubscribeMessage('init')
+async handleStartSession(client: Socket) {
+  this.logger.log(`Starting WhatsApp session for client: ${client.id}`);
+  const token = client.handshake.headers.authorization?.split(' ')[1] ||
+  client.handshake.auth?.token;
+  if (!token) {
+    client.emit('error', {
+      message: 'Missing or invalid Authorization header',
+    });
+    throw new UnauthorizedException('Missing or invalid Authorization header');
+  }
 
-    const authHeader = client.handshake.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  this.logger.log(`Token received: ${token}`);
+
+  let userId: string;
+  try {
+    const payload = verify(token, process.env.JWT_SECRET!) as { sub: string };
+    userId = payload.sub;
+    if (!Types.ObjectId.isValid(userId)) {
       client.emit('error', {
-        message: 'Missing or invalid Authorization header',
+        message: 'Invalid userId in token: must be a valid ObjectId',
       });
-      throw new UnauthorizedException(
-        'Missing or invalid Authorization header',
-      );
+      throw new BadRequestException('Invalid userId in token');
     }
+  } catch (err) {
+    client.emit('error', { message: 'Invalid or expired token' });
+    throw new UnauthorizedException('Invalid or expired token');
+  }
 
-    const token = authHeader.split(' ')[1];
-    this.logger.log(`Token received: ${token}`);
-
-    let userId: string;
-    try {
-      const payload = verify(token, process.env.JWT_SECRET!) as {
-        sub: string;
-      }; // Adjust secret and payload type
-      userId = payload.sub;
-      if (!Types.ObjectId.isValid(userId)) {
-        client.emit('error', {
-          message: 'Invalid userId in token: must be a valid ObjectId',
-        });
-        throw new BadRequestException('Invalid userId in token');
-      }
-    } catch (err) {
-      client.emit('error', { message: 'Invalid or expired token' });
-      throw new UnauthorizedException('Invalid or expired token');
-    }
+  try {
     const { clientId } = await this.whatsappService.startSession(
-      client.id,// client id from socket
+      client.id,
+      userId,
       (event, data) => {
+                  client.emit(event, data); // Emit to the specific client
         if (this.clientIdMap.has(client.id)) {
           client.emit(event, data); // Emit to the specific client
         }
       },
     );
-    this.clientIdMap.set(client.id, clientId);
+
+    if(clientId){
+    this.clientIdMap.set(client.id, clientId!);
+    }
     return { clientId };
+  } catch (err) {
+    client.emit('error', {
+      message: 'Failed to start WhatsApp session',
+      details: err.message,
+    });
+    throw new BadRequestException('Failed to start WhatsApp session');
   }
+}
 
   @SubscribeMessage('send-message')
   async handleSendMessage(

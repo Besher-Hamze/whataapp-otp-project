@@ -5,9 +5,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Account, AccountDocument } from '../accounts/schema/account.schema';
 import { UserDocument } from '../users/schema/users.schema';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
+import { GetWhatsappAccountId } from 'src/common/decorators/intex';
 
 
-// @UseGuards(JwtGuard)
+@UseGuards(JwtGuard)
 @Controller('whatsapp')
 export class WhatsAppController {
   
@@ -27,10 +28,11 @@ export class WhatsAppController {
   @Post('send-message')
   async sendMessage(
     @Body() body: { clientId: string; to: string; message: string },
+    @GetWhatsappAccountId() accountId:string
   ) {
     return await this.whatsappService.sendMessage(
       '',
-      body.clientId,
+      accountId,
       body.to,
       body.message,
     );

@@ -2,39 +2,73 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import helmet from 'helmet';
+import * as compression from 'compression';
+import * as cookieParser from 'cookie-parser';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'warn', 'log', 'debug'], // Set logging levels
+  });
+  
+  // Security middleware
+  app.use(helmet());
+  app.use(compression());
+  app.use(cookieParser());
+  
+  // Enable CORS with secure configuration
   app.enableCors({
     origin: (origin, callback) => {
       // List of allowed origins
       const allowedOrigins = [
         'http://localhost:3000', // Common frontend dev URL
         'http://localhost:4200', // Common for Angular
-        'https://your-frontend-app.com', // Replace with production frontend URL when known
-        '*'
-      ];
-
-      // Allow requests with no origin (e.g., Postman, cURL) or if origin is in allowed list
-      if (!origin || allowedOrigins.includes(origin)) {
+        process.env.FRONTEND_URL, // Production frontend URL
+      ].filter(Boolean); // Remove null/undefined values
+      
+      // Allow requests with no origin (e.g., Postman, cURL) in development
+      const isDevelopment = process.env.NODE_ENV !== 'production';
+      
+      if (!origin || allowedOrigins.includes(origin) || (isDevelopment && !origin)) {
         callback(null, true);
       } else {
         console.log(`CORS blocked request from origin: ${origin}`);
-                callback(null, true);
         callback(new Error('Not allowed by CORS'));
       }
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type, Authorization',
-    credentials: true, // Support cookies or auth headers (e.g., JWT)
+    allowedHeaders: 'Content-Type, Authorization, X-Requested-With',
+    credentials: true, // Support cookies or auth headers
+    maxAge: 86400, // Cache preflight requests for 1 day (in seconds)
   });
   
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-
+  // Global validation pipe
+  app.useGlobalPipes(new ValidationPipe({ 
+    whitelist: true, // Remove unknown properties
+    transform: true, // Transform payloads to DTO instances
+    forbidNonWhitelisted: true, // Throw errors if unknown properties are present
+    transformOptions: {
+      enableImplicitConversion: true, // Automatically convert primitive types
+    },
+  }));
+  
+  // Global filters
+  app.useGlobalFilters(new GlobalExceptionFilter());
+  
+  // WebSocket adapter
   app.useWebSocketAdapter(new IoAdapter(app)); 
-  await app.listen(3000, '0.0.0.0' , ()=> {
-        console.log("App Started on : http://localhost:3000");
+  
+  const port = process.env.PORT || 3000;
+  const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
+  
+  await app.listen(port, host, () => {
+    console.log(`Server running on ${host}:${port} in ${process.env.NODE_ENV || 'development'} mode`);
+    console.log(`API documentation available at http://${host}:${port}/api`);
   }); 
 }
 
-bootstrap();
+bootstrap().catch(err => {
+  console.error('Failed to start application:', err);
+  process.exit(1);
+});

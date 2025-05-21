@@ -1,25 +1,47 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
+import { User } from '../../users/schema/users.schema';
 
-@Schema()
-export class Contact extends Document {
+@Schema({ timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } })
+export class Contact {
+
+  _id: Types.ObjectId;
   @Prop({ required: true })
   name: string;
 
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true })
   phone_number: string;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Group' }] })
+  @Prop({ type: [{ type: MongooseSchema.Types.ObjectId, ref: 'Group' }], default: [] })
   groups: Types.ObjectId[];
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // or Account
+  @Prop({ type: [String], default: [] })
+  tags: string[];
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: false })
   account: Types.ObjectId;
 
-  @Prop()
-  created_at: Date;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
+  user: User;
 
-  @Prop()
-  updated_at: Date;
+  @Prop({ type: Object, default: {} })
+  metadata: Record<string, any>;
+
+  @Prop({ type: Date })
+  last_contacted: Date;
+
+  @Prop({ default: '' })
+  notes: string;
+
+  @Prop({ default: false })
+  starred: boolean;
 }
 
+export type ContactDocument = Contact & Document;
 export const ContactSchema = SchemaFactory.createForClass(Contact);
+
+// Compound index for phone_number and user to ensure uniqueness per user
+ContactSchema.index({ phone_number: 1, user: 1 }, { unique: true });
+
+// Index for improved search performance 
+ContactSchema.index({ name: 'text', phone_number: 'text', tags: 'text' });

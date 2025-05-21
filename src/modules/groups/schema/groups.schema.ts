@@ -3,6 +3,8 @@ import { Document, Types } from 'mongoose';
 
 @Schema()
 export class Group extends Document {
+
+  _id: Types.ObjectId;
   @Prop({ required: true })
   name: string;
 

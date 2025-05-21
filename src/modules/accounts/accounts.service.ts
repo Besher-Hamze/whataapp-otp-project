@@ -9,6 +9,7 @@ import { Model } from 'mongoose';
 export class AccountsService {
   constructor(@InjectModel(Account.name) private accountModel: Model<AccountDocument>) {}
   private readonly logger = new Logger(AccountsService.name);
+  
   async create(createAccountDto: CreateAccountDto & { user: string }) {
     const existingAccount = await this.accountModel.findOne({
       $or: [{ phone_number: createAccountDto.phone_number }],
@@ -25,11 +26,11 @@ export class AccountsService {
     return newAccount;
   }
 
-  async findAllAccounts(): Promise<AccountDocument[]> { // Update return type
+  async findAllAccounts(): Promise<AccountDocument[]> {
     return this.accountModel.find().exec();
   }
 
-  async findAccountById(id: string): Promise<AccountDocument | null> { // Update return type
+  async findAccountById(id: string): Promise<AccountDocument | null> {
     try {
       const account = await this.accountModel.findById(id).exec();
       if (!account) {
@@ -44,7 +45,31 @@ export class AccountsService {
     }
   }
 
-  async updateAccount(id: string, updateAccountDto: UpdateAccountDto): Promise<AccountDocument | null> { // Update return type
+  // Added missing methods
+  async findById(id: string): Promise<AccountDocument | null> {
+    return this.findAccountById(id);
+  }
+
+  async findOne(id: string, userId: string): Promise<AccountDocument | null> {
+    try {
+      const account = await this.accountModel.findOne({ 
+        _id: id,
+        user: userId
+      }).exec();
+      
+      if (!account) {
+        this.logger.warn(`Account ${id} not found or does not belong to user ${userId}`);
+        return null;
+      }
+      
+      return account;
+    } catch (error) {
+      this.logger.error(`Error finding account: ${error.message}`, error.stack);
+      return null;
+    }
+  }
+
+  async updateAccount(id: string, updateAccountDto: UpdateAccountDto): Promise<AccountDocument | null> {
     const existingAccount = await this.accountModel.findById(id).exec();
     if (!existingAccount) {
       throw new NotFoundException(`Account with ID "${id}" not found`);
@@ -78,6 +103,7 @@ export class AccountsService {
       throw new NotFoundException(`Account with ID "${id}" not found`);
     }
   }
+  
   async findAccountsByUser(userId: string): Promise<AccountDocument[]> {
     this.logger.log(`Starting findAccountsByUser for userId: ${userId}`);
     try {

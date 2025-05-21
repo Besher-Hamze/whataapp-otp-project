@@ -3,13 +3,10 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppController } from './whatsapp.controller';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Account, AccountSchema } from '../accounts/schema/account.schema';
-
 import { User, UserSchema } from '../users/schema/users.schema';
-
 import { AccountsModule } from '../accounts/accounts.module';
 import { UsersModule } from '../users/users.module';
 import { WhatsAppGateway } from './whatsapp.gateway';
-
 
 @Module({
   imports: [
@@ -22,5 +19,6 @@ import { WhatsAppGateway } from './whatsapp.gateway';
   ],
   controllers: [WhatsAppController],
   providers: [WhatsAppGateway, WhatsAppService],
+  exports: [WhatsAppService]
 })
 export class WhatsappModule {}

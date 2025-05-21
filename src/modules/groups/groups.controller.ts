@@ -10,38 +10,39 @@ import {
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
+import { GetUserId } from 'src/common/decorators';
 
 @Controller('groups')
 export class GroupsController {
-  constructor(private readonly groupsService: GroupsService) {}
+  constructor(private readonly groupsService: GroupsService) { }
 
   @Post()
-  create(@Body() createGroupDto: CreateGroupDto) {
-    return this.groupsService.create(createGroupDto);
+  create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string) {
+    return this.groupsService.create(createGroupDto, userId);
   }
 
   @Get()
-  findAll() {
-    return this.groupsService.findAllGroups();
+  findAll(@GetUserId() userId: string) {
+    return this.groupsService.findAllGroups(userId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.groupsService.findGroupById(id);
+  findOne(@Param('id') id: string, @GetUserId() userId: string) {
+    return this.groupsService.findGroupById(id, userId);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateGroupDto: UpdateGroupDto) {
-    return this.groupsService.updateGroup(id, updateGroupDto);
+  update(@Param('id') id: string, @Body() updateGroupDto: UpdateGroupDto, @GetUserId() userId: string) {
+    return this.groupsService.updateGroup(id, updateGroupDto, userId);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.groupsService.deleteGroup(id);
+  remove(@Param('id') id: string, @GetUserId() userId: string) {
+    return this.groupsService.deleteGroup(id, userId);
   }
 
   @Get('account/:accountId')
-  findByAccount(@Param('accountId') accountId: string) {
-    return this.groupsService.findByAccountId(accountId);
+  findByAccount(@Param('accountId') accountId: string, @GetUserId() userId: string) {
+    return this.groupsService.findByAccountId(accountId, userId);
   }
 }

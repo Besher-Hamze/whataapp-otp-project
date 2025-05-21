@@ -1,11 +1,10 @@
 import { Prop } from '@nestjs/mongoose';
-import {} from 'class-validator'
+import { IsString } from 'class-validator'
 
 export class CreateRuleDto {
-    
-    @Prop({ required: true })
-      keyword: string;
 
-    @Prop({ required: true })
-      response: string;
+  @IsString()
+  keyword: string;
+  @IsString()
+  response: string;
 }

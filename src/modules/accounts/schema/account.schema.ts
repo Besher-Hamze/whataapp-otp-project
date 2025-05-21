@@ -21,6 +21,12 @@ export class Account {
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   user: Types.ObjectId;
+
+  @Prop({ required: false })
+  clientId?: string;
+
+  @Prop({ required: true, enum: ['active', 'disconnected'], default: 'active' })
+  status: string;
 }
 
 export const AccountSchema = SchemaFactory.createForClass(Account);

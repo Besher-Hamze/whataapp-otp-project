@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Client, LocalAuth } from 'whatsapp-web.js';
@@ -10,7 +10,7 @@ import { Account, AccountDocument } from '../accounts/schema/account.schema';
 import { Model } from 'mongoose';
 
 @Injectable()
-export class WhatsAppService {
+export class WhatsAppService implements OnModuleInit {
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
   ) {}
@@ -18,6 +18,100 @@ export class WhatsAppService {
   private clients: Map<string, Client> = new Map();
   private socketClientMap: Map<string, string> = new Map();
 
+  async onModuleInit() {
+    this.loadClientsFromSessions(); // Load mappings on module initialization
+  }
+
+private async loadClientsFromSessions() {
+  const authDir = path.join(process.cwd(), '.wwebjs_auth');
+  if (!fs.existsSync(authDir)) {
+    console.warn('[WhatsAppService] .wwebjs_auth directory not found. No sessions loaded.');
+    return;
+  }
+
+  const sessionFiles = fs.readdirSync(authDir).filter(file => file.startsWith('session-'));
+  console.log(`[WhatsAppService] Found ${sessionFiles.length} session files.`);
+
+  for (const file of sessionFiles) {
+    const clientId = file.replace('session-', '');
+    console.log(`[WhatsAppService] Loading client for session: ${file}, clientId: ${clientId}`);
+
+    try {
+      // Validate session directory (unchanged as per your request)
+      const sessionPath = path.join(authDir, file);
+      console.log(sessionPath);
+      
+      if (!this.isValidSession(sessionPath)) {
+        console.warn(`[WhatsAppService] Invalid session for ${clientId}. Skipping.`);
+        // await this.cleanupSession(sessionPath);
+        continue;
+      }
+
+      const client = new Client({
+        authStrategy: new LocalAuth({ clientId }),
+        puppeteer: { headless: true, args: ['--no-sandbox'] },
+      });
+
+      // Initialize client
+      await client.initialize();
+
+      // Store client (remove socketClientMap setting)
+      this.clients.set(clientId, client);
+      console.log(`[WhatsAppService] Client for ${clientId} loaded and initialized.`);
+
+      client.on('ready', () => {
+        console.log(`[${clientId}] 🔔 WhatsApp client is ready`);
+      });
+
+      client.on('auth_failure', () => {
+        console.error(`[${clientId}] Authentication failed. Removing session.`);
+        this.clients.delete(clientId);
+        this.socketClientMap.delete(clientId);
+        this.cleanupSession(sessionPath);
+      });
+
+      client.on('disconnected', async (reason) => {
+        console.warn(`[${clientId}] 🔌 Disconnected: ${reason}`);
+        this.clients.delete(clientId);
+        this.socketClientMap.delete(clientId);
+        await this.accountModel.updateOne({ clientId }, { status: 'disconnected' }).exec();
+        this.cleanupSession(sessionPath);
+      });
+
+    } catch (error) {
+      console.error(`[WhatsAppService] Failed to load client for ${clientId}:`, error);
+      await this.cleanupSession(path.join(authDir, file));
+    }
+  }
+
+  console.log(`[WhatsAppService] Loaded ${this.clients.size} clients from .wwebjs_auth.`);
+}
+
+// Helper to validate session directory
+private isValidSession(sessionPath: string): boolean {
+  try {
+    const defaultPath = path.join(sessionPath, 'Default');
+    if (!fs.existsSync(defaultPath) || !fs.statSync(defaultPath).isDirectory()) {
+      console.warn(`[WhatsAppService] Default folder not found in ${sessionPath}`);
+      return false;
+    }
+    const files = fs.readdirSync(defaultPath);
+    return files.includes('Cookies') && files.length > 0;
+  } catch (error) {
+    console.error(`[WhatsAppService] Error validating session ${sessionPath}:`, error);
+    return false;
+  }
+}
+
+// Helper to clean up corrupted session
+private async cleanupSession(sessionPath: string): Promise<void> {
+  // try {
+  //   await fs.promises.rm(sessionPath, { recursive: true, force: true });
+  //   console.log(`[WhatsAppService] Cleaned up session directory: ${sessionPath}`);
+  // } catch (error) {
+  //   console.error(`[WhatsAppService] Failed to clean up session ${sessionPath}:`, error);
+  // }
+}
 async startSession(socketClientId: string, userId : string ,emit: (event: string, data: any) => void) {
   // Check if a session already exists for this socket
   if (this.socketClientMap.has(socketClientId)) {
@@ -69,17 +163,29 @@ async startSession(socketClientId: string, userId : string ,emit: (event: string
     console.log(`[${clientId}] 👤 Logged in as: ${name} (${phoneNumber})`);
 
     try {
+      console.log(`[${clientId}] 💾 Checking for existing account`);
+        const existingAccount = await this.accountModel.findOne({ phone_number: phoneNumber }).exec();
+        if (existingAccount) {
+          console.warn(`[${clientId}] 🚫 Phone number already exists: ${phoneNumber}`);
+          emit('error', { message: 'Phone number already exists', phoneNumber });
+          throw new ConflictException('Phone number already exists');
+        }
+
       console.log(`[${clientId}] 💾 Saving account to database`);
       await this.accountModel.create({
-        name,
-        phone_number: phoneNumber,
-        user: userId,
+          name,
+          phone_number: phoneNumber,
+          user: userId,
+          clientId,
+          status: 'active',
       });
       console.log(`[${clientId}] ✅ Account saved to DB`);
       emit('ready', {
-        phoneNumber,
-        name,
-        message: 'WhatsApp client ready and account saved.',
+          phoneNumber,
+          name,
+          clientId,
+          status: 'active',
+          message: 'WhatsApp client ready and account saved.',
       });
     } catch (err) {
       console.error(`[${clientId}] ❌ Failed to save account to DB:`, err);
@@ -92,8 +198,8 @@ async startSession(socketClientId: string, userId : string ,emit: (event: string
 
   client.on('disconnected', (reason) => {
     console.warn(`[${clientId}] 🔌 Disconnected: ${reason}`);
-    this.clients.delete(clientId);
-    this.socketClientMap.delete(socketClientId);
+    // this.clients.delete(clientId);
+    // this.socketClientMap.delete(socketClientId);
     emit('disconnected', { clientId, reason });
   });
 
@@ -113,22 +219,10 @@ async startSession(socketClientId: string, userId : string ,emit: (event: string
 }
 
   async sendMessage(
-    socketClientId: string,
     clientId: string,
-    to: string,
+    to: string[], // Change to string[]
     message: string,
   ) {
-    const storedClientId = this.socketClientMap.get(socketClientId);
-    console.log(`[${clientId}] 📨 Attempting to send message to ${to}`);
-
-    if (!storedClientId || storedClientId !== clientId) {
-      console.warn(`[${clientId}] 🚫 Unauthorized session`);
-      throw new HttpException(
-        'Invalid or unauthorized session',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-
     const client = this.clients.get(clientId);
 
     if (!client) {
@@ -140,11 +234,14 @@ async startSession(socketClientId: string, userId : string ,emit: (event: string
     }
 
     try {
-      const chatId = to.includes('@') ? to : `${to}@c.us`;
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // Delay before sending
-      await client.sendMessage(chatId, message);
-      console.log(`[${clientId}] ✅ Message sent to ${chatId}`);
-      return { message: 'Message sent successfully' };
+      //  Iterate over the 'to' array and send the message to each recipient
+     for (const recipient of to) {
+    const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await client.sendMessage(chatId, message);
+    console.log(`[${clientId}] ✅ Message sent to ${chatId}`);
+  }
+      return { message: 'Messages sent successfully' };
     } catch (err) {
       console.error(`[${clientId}] ❌ Error sending message:`, err);
       throw new HttpException(

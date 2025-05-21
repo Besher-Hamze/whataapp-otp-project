@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { InjectModel } from '@nestjs/mongoose';
@@ -92,6 +92,30 @@ export class AccountsService {
     } catch (error) {
       if (error.name === 'CastError') {
         throw new NotFoundException(`Invalid user ID "${userId}"`);
+      }
+      throw error;
+    }
+  }
+  
+  async findClientIdByAccountId(accountId: string, userId: string): Promise<{ clientId: string; status: string }> {
+    try {
+      const account = await this.accountModel.findOne({ _id: accountId, user: userId }).exec();
+      if (!account) {
+        this.logger.warn(`Account with ID "${accountId}" not found or does not belong to user "${userId}"`);
+        throw new NotFoundException(`Account with ID "${accountId}" not found or unauthorized`);
+      }
+      if (!account.clientId) {
+        this.logger.warn(`No clientId for account "${accountId}"`);
+        throw new BadRequestException(`No WhatsApp session found for account "${accountId}"`);
+      }
+      if (account.status === 'disconnected') {
+        this.logger.warn(`Account "${accountId}" is disconnected`);
+        throw new BadRequestException(`WhatsApp session for account "${accountId}" is disconnected`);
+      }
+      return { clientId: account.clientId, status: account.status };
+    } catch (error) {
+      if (error.name === 'CastError') {
+        throw new NotFoundException(`Invalid Account ID "${accountId}"`);
       }
       throw error;
     }

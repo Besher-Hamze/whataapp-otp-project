@@ -15,6 +15,8 @@ import {
 } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { verify } from 'jsonwebtoken';
+import * as path from 'path';
+import * as fs from 'fs';
 @WebSocketGateway({ cors: { origin: '*' }, path: '' })
 export class WhatsAppGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -22,12 +24,12 @@ export class WhatsAppGateway
   @WebSocketServer() server: Server;
   private logger: Logger = new Logger('WhatsAppGateway');
   private clientIdMap: Map<string, string> = new Map(); // Maps socket.id to WhatsApp clientId
-
+  private socketClientMap: Map<string, string> = new Map(); 
   constructor(private readonly whatsappService: WhatsAppService) {}
 
-  afterInit() {
-    this.logger.log('WebSocket Gateway initialized');
-  }
+  async afterInit() {
+       this.logger.log('WebSocket Gateway initialized');
+     }
 
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
@@ -99,11 +101,10 @@ async handleStartSession(client: Socket) {
   @SubscribeMessage('send-message')
   async handleSendMessage(
     client: Socket,
-    payload: { clientId: string; to: string; message: string },
+    payload: { clientId: string; to: string[]; message: string },
   ) {
     this.logger.log(`Sending message for client: ${client.id}`);
     return await this.whatsappService.sendMessage(
-      client.id,
       payload.clientId,
       payload.to,
       payload.message,

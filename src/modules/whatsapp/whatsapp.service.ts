@@ -28,7 +28,7 @@ export class WhatsAppService implements OnModuleInit {
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private moduleRef: ModuleRef,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     await this.loadClientsFromSessions();
@@ -59,7 +59,7 @@ export class WhatsAppService implements OnModuleInit {
 
       try {
         const sessionPath = path.join(authDir, file);
-        
+
         if (!this.isValidSession(sessionPath)) {
           this.logger.warn(`Invalid session for ${clientId}. Skipping.`);
           continue;
@@ -67,7 +67,16 @@ export class WhatsAppService implements OnModuleInit {
 
         const client = new Client({
           authStrategy: new LocalAuth({ clientId }),
-          puppeteer: { headless: true, args: ['--no-sandbox'] },
+          puppeteer: {
+            headless: true, args: ['--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-accelerated-2d-canvas',
+              '--no-first-run',
+              '--no-zygote',
+              '--disable-gpu'
+            ]
+          },
         });
 
         // Set up message handler for incoming messages
@@ -160,7 +169,16 @@ export class WhatsAppService implements OnModuleInit {
 
     const client = new Client({
       authStrategy: new LocalAuth({ clientId }),
-      puppeteer: { headless: true, args: ['--no-sandbox'] },
+      puppeteer: {
+        headless: true, args: ['--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
+        ]
+      },
     });
 
     // Set up message handler for incoming messages
@@ -258,19 +276,19 @@ export class WhatsAppService implements OnModuleInit {
         // Skip messages sent by the current account
         return;
       }
-      
+
       // Get the account associated with this client ID
       const account = await this.accountModel.findOne({ clientId }).exec();
       if (!account) {
         this.logger.warn(`No account found for client ${clientId}`);
         return;
       }
-      
+
       const accountId = account._id.toString();
       const sender = message.from.split('@')[0]; // Extract phone number
-      
+
       this.logger.log(`Received message from ${sender} to account ${accountId}: ${message.body.substring(0, 50)}${message.body.length > 50 ? '...' : ''}`);
-      
+
       // Pass message to all registered handlers
       for (const handler of this.messageHandlers) {
         try {
@@ -322,20 +340,20 @@ export class WhatsAppService implements OnModuleInit {
 
     try {
       this.logger.log(`[${clientId}] Starting to send message to ${to.length} recipients with ${delayMs}ms delay`);
-      
+
       const results: MessageResult[] = [];
 
       // Send to each recipient with the specified delay
       for (let i = 0; i < to.length; i++) {
         const recipient = to[i];
         const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
-        
+
         try {
           // Send the message
           await client.sendMessage(chatId, message);
           results.push({ recipient, status: 'sent' });
-          this.logger.log(`[${clientId}] ✅ Message sent to ${chatId} (${i+1}/${to.length})`);
-          
+          this.logger.log(`[${clientId}] ✅ Message sent to ${chatId} (${i + 1}/${to.length})`);
+
           // If not the last recipient, apply the delay
           if (i < to.length - 1) {
             this.logger.debug(`[${clientId}] Waiting ${delayMs}ms before sending next message`);
@@ -367,7 +385,7 @@ export class WhatsAppService implements OnModuleInit {
       this.logger.warn(`No client found for socket: ${socketClientId}`);
       return;
     }
-    
+
     this.logger.log(`[${clientId}] Disconnect requested for socket: ${socketClientId}`);
 
     const client = this.clients.get(clientId);
@@ -378,7 +396,7 @@ export class WhatsAppService implements OnModuleInit {
         setTimeout(() => this.performDisconnect(clientId, socketClientId), 5000);
         return;
       }
-      
+
       this.performDisconnect(clientId, socketClientId);
     } else {
       this.socketClientMap.delete(socketClientId);
@@ -394,11 +412,11 @@ export class WhatsAppService implements OnModuleInit {
         this.clients.delete(clientId);
         this.logger.log(`[${clientId}] WhatsApp client destroyed`);
       }
-      
+
       this.socketClientMap.delete(socketClientId);
       this.sendingMessages.delete(clientId);
       this.logger.log(`[${clientId}] Session mapping cleared`);
-      
+
       // Update account status in database
       await this.accountModel.updateOne({ clientId }, { status: 'disconnected' }).exec();
     } catch (error) {
@@ -417,7 +435,7 @@ export class WhatsAppService implements OnModuleInit {
     this.logger.log(`Current client session IDs: ${sessions.join(', ')}`);
     return sessions;
   }
-  
+
   /**
    * Get all WhatsApp accounts for a specific user
    * @param userId User ID
@@ -426,7 +444,7 @@ export class WhatsAppService implements OnModuleInit {
   async getUserAccounts(userId: string) {
     return this.accountModel.find({ user: userId }).exec();
   }
-  
+
   /**
    * Check if a specific client is connected and ready
    * @param clientId WhatsApp client ID

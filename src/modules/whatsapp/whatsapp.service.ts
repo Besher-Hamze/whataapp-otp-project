@@ -573,36 +573,214 @@ export class WhatsAppService implements OnModuleInit {
 
   private isValidSession(sessionPath: string): boolean {
     try {
-      if (!fs.existsSync(sessionPath)) return false;
+      if (!fs.existsSync(sessionPath)) {
+        return false;
+      }
 
       const defaultPath = path.join(sessionPath, 'Default');
-      if (!fs.existsSync(defaultPath)) return false;
+      if (!fs.existsSync(defaultPath)) {
+        return false;
+      }
+
+      // Check if marked for cleanup
+      const cleanupFlag = path.join(sessionPath, '.cleanup_required');
+      if (fs.existsSync(cleanupFlag)) {
+        this.logger.warn(`Session marked for cleanup: ${sessionPath}`);
+        return false;
+      }
 
       const stats = fs.statSync(defaultPath);
-      if (!stats.isDirectory()) return false;
+      if (!stats.isDirectory()) {
+        return false;
+      }
 
       const files = fs.readdirSync(defaultPath);
       const hasRequiredFiles = files.some(file =>
-        file.includes('Cookies') || file.includes('Local State')
+        file.includes('Cookies') ||
+        file.includes('Local State') ||
+        file.includes('Preferences')
       );
 
-      return hasRequiredFiles && files.length > 2; // Should have multiple files
+      // Check for minimum file count and required files
+      const isValid = hasRequiredFiles && files.length > 2;
+
+      if (!isValid) {
+        this.logger.debug(`Invalid session detected: ${sessionPath} (${files.length} files)`);
+      }
+
+      return isValid;
     } catch (error) {
       this.logger.error(`❌ Session validation error: ${error.message}`);
       return false;
     }
   }
+  private async cleanupMarkedSessions(): Promise<void> {
+    try {
+      const authDir = path.join(process.cwd(), '.wwebjs_auth');
+      if (!fs.existsSync(authDir)) {
+        return;
+      }
+
+      const sessionDirs = fs.readdirSync(authDir)
+        .filter(dir => dir.startsWith('session-'))
+        .map(dir => path.join(authDir, dir));
+
+      for (const sessionPath of sessionDirs) {
+        const flagFile = path.join(sessionPath, '.cleanup_required');
+        if (fs.existsSync(flagFile)) {
+          this.logger.log(`🧹 Attempting cleanup of marked session: ${sessionPath}`);
+          await this.forceRemoveDirectory(sessionPath);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error cleaning marked sessions: ${error.message}`);
+    }
+  }
 
   private async cleanupSession(sessionPath: string): Promise<void> {
     try {
-      if (fs.existsSync(sessionPath)) {
-        await fs.promises.rm(sessionPath, { recursive: true, force: true });
-        this.logger.debug(`🗑️ Cleaned up session: ${sessionPath}`);
+      if (!fs.existsSync(sessionPath)) {
+        this.logger.debug(`📁 Session path doesn't exist: ${sessionPath}`);
+        return;
       }
+
+      this.logger.debug(`🧹 Starting cleanup of session: ${sessionPath}`);
+
+      // Force remove with retry logic
+      await this.forceRemoveDirectory(sessionPath, 3);
+
+      this.logger.debug(`✅ Successfully cleaned up session: ${sessionPath}`);
     } catch (error) {
       this.logger.error(`❌ Session cleanup failed: ${error.message}`);
+
+      // Try alternative cleanup methods
+      await this.alternativeCleanup(sessionPath);
     }
   }
+  private async forceRemoveDirectory(dirPath: string, retries: number = 3): Promise<void> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        // Method 1: Use fs.rm with force and recursive (Node.js 14.14+)
+        if (fs.promises.rm) {
+          await fs.promises.rm(dirPath, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 100
+          });
+          return;
+        }
+
+        // Method 2: Fallback to rmdir with recursive
+        await fs.promises.rmdir(dirPath, { recursive: true });
+        return;
+
+      } catch (error) {
+        this.logger.warn(`🔄 Cleanup attempt ${attempt}/${retries} failed: ${error.message}`);
+
+        if (attempt === retries) {
+          throw error;
+        }
+
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+      }
+    }
+  }
+  private async alternativeCleanup(sessionPath: string): Promise<void> {
+    try {
+      this.logger.warn(`🔧 Attempting alternative cleanup for: ${sessionPath}`);
+
+      // First, try to unlock files by changing permissions
+      try {
+        await this.unlockDirectory(sessionPath);
+      } catch (permError) {
+        this.logger.debug(`Permission change failed: ${permError.message}`);
+      }
+
+      // Method 1: Manual recursive deletion
+      await this.recursiveDelete(sessionPath);
+
+    } catch (error) {
+      this.logger.error(`💥 Alternative cleanup also failed: ${error.message}`);
+
+      // Last resort: Use system command
+      await this.systemCleanup(sessionPath);
+    }
+  }
+  private async recursiveDelete(dirPath: string): Promise<void> {
+    if (!fs.existsSync(dirPath)) {
+      return;
+    }
+
+    const stats = await fs.promises.lstat(dirPath);
+
+    if (stats.isDirectory()) {
+      const entries = await fs.promises.readdir(dirPath);
+
+      // Delete all contents first
+      await Promise.all(
+        entries.map(entry =>
+          this.recursiveDelete(path.join(dirPath, entry))
+        )
+      );
+
+      // Then delete the directory itself
+      await fs.promises.rmdir(dirPath);
+    } else {
+      // Delete file
+      await fs.promises.unlink(dirPath);
+    }
+  }
+
+  private async unlockDirectory(dirPath: string): Promise<void> {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    try {
+      // Change permissions to allow deletion (Linux/Unix)
+      await execAsync(`chmod -R 755 "${dirPath}"`);
+      this.logger.debug(`🔓 Changed permissions for: ${dirPath}`);
+    } catch (error) {
+      // Ignore permission errors on systems where this doesn't work
+      this.logger.debug(`Permission change not supported: ${error.message}`);
+    }
+  }
+  private async systemCleanup(sessionPath: string): Promise<void> {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    try {
+      this.logger.warn(`🔨 Using system command to cleanup: ${sessionPath}`);
+
+      // Use rm -rf on Unix systems
+      if (process.platform !== 'win32') {
+        await execAsync(`rm -rf "${sessionPath}"`);
+      } else {
+        // Use rmdir /s on Windows
+        await execAsync(`rmdir /s /q "${sessionPath}"`);
+      }
+
+      this.logger.log(`✅ System cleanup successful: ${sessionPath}`);
+    } catch (error) {
+      this.logger.error(`💀 System cleanup failed: ${error.message}`);
+
+      // Mark for manual cleanup
+      this.markForManualCleanup(sessionPath);
+    }
+  }
+  private markForManualCleanup(sessionPath: string): void {
+    try {
+      const flagFile = path.join(sessionPath, '.cleanup_required');
+      fs.writeFileSync(flagFile, `Cleanup required at: ${new Date().toISOString()}`);
+      this.logger.warn(`🏷️ Marked for manual cleanup: ${sessionPath}`);
+    } catch (error) {
+      this.logger.error(`Failed to mark for cleanup: ${error.message}`);
+    }
+  }
+
 
   /**
    * Get detailed client information

@@ -17,7 +17,7 @@ import { GetUserId } from 'src/common/decorators';
 @Controller('groups')
 @UseGuards(AuthGuard('jwt'))
 export class GroupsController {
-  constructor(private readonly groupsService: GroupsService) { }
+  constructor(private readonly groupsService: GroupsService) {}
 
   @Post()
   create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string) {
@@ -35,7 +35,11 @@ export class GroupsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateGroupDto: UpdateGroupDto, @GetUserId() userId: string) {
+  update(
+    @Param('id') id: string,
+    @Body() updateGroupDto: UpdateGroupDto,
+    @GetUserId() userId: string,
+  ) {
     return this.groupsService.updateGroup(id, updateGroupDto, userId);
   }
 
@@ -45,7 +49,10 @@ export class GroupsController {
   }
 
   @Get('account/:accountId')
-  findByAccount(@Param('accountId') accountId: string, @GetUserId() userId: string) {
+  findByAccount(
+    @Param('accountId') accountId: string,
+    @GetUserId() userId: string,
+  ) {
     return this.groupsService.findByAccountId(accountId, userId);
   }
 }

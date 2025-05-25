@@ -64,7 +64,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
 
-  await app.listen(3001, () => {
+  await app.listen(port, () => {
     console.log(`Server running on ${host}:${port} in ${process.env.NODE_ENV || 'development'} mode`);
     console.log(`API documentation available at http://${host}:${port}/api`);
   });

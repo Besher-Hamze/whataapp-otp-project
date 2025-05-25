@@ -1,8 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-@Schema()
-export class Group extends Document {
+export type GroupDocument = Group & Document;
+
+@Schema({ timestamps: true })
+export class Group {
 
   _id: Types.ObjectId;
   @Prop({ required: true })
@@ -14,11 +16,7 @@ export class Group extends Document {
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // or Account
   account: Types.ObjectId;
 
-  @Prop()
-  created_at: Date;
 
-  @Prop()
-  updated_at: Date;
 }
 
 export const GroupSchema = SchemaFactory.createForClass(Group);

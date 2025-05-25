@@ -17,10 +17,11 @@ export class CreateGroupDto {
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
-  @Type(() => ContactInGroupDto) // ✅ replace CreateContactDto
+  @Type(() => ContactInGroupDto)
   phone_numbers: ContactInGroupDto[];
 
   @IsMongoId()
   @IsNotEmpty()
   account: string;
 }
+

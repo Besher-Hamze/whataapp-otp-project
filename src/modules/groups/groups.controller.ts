@@ -6,13 +6,16 @@ import {
   Patch,
   Param,
   Delete,
+  UseGuards,
 } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { GetUserId } from 'src/common/decorators';
 
 @Controller('groups')
+@UseGuards(AuthGuard('jwt'))
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) { }
 

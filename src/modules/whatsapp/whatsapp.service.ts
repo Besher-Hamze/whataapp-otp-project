@@ -1,4 +1,11 @@
-import { ConflictException, HttpException, HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
@@ -28,7 +35,9 @@ export class WhatsAppService implements OnModuleInit {
   private readonly clients = new Map<string, Client>();
   private readonly socketClientMap = new Map<string, string>();
   private readonly sendingMessages = new Map<string, boolean>();
-  private readonly messageHandlers: Array<(message: any, accountId: string) => Promise<void>> = [];
+  private readonly messageHandlers: Array<
+    (message: any, accountId: string) => Promise<void>
+  > = [];
 
   // Performance optimizations
   private readonly qrCache = new Map<string, QRGenerationCache>();
@@ -40,41 +49,41 @@ export class WhatsAppService implements OnModuleInit {
     headless: true,
     args: [
       '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-features=TranslateUI,VizDisplayCompositor',
-      '--disable-ipc-flooding-protection',
-      '--disable-extensions',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--metrics-recording-only',
-      '--no-default-browser-check',
-      '--mute-audio',
-      '--no-crash-upload',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-domain-reliability',
-      '--disable-features=AudioServiceOutOfProcess',
-      '--single-process', // Critical for VPS environments
-      '--memory-pressure-off',
-      '--max_old_space_size=4096'
+      // '--disable-setuid-sandbox',
+      // '--disable-dev-shm-usage',
+      // '--disable-accelerated-2d-canvas',
+      // '--no-first-run',
+      // '--no-zygote',
+      // '--disable-gpu',
+      // '--disable-background-timer-throttling',
+      // '--disable-backgrounding-occluded-windows',
+      // '--disable-renderer-backgrounding',
+      // '--disable-features=TranslateUI,VizDisplayCompositor',
+      // '--disable-ipc-flooding-protection',
+      // '--disable-extensions',
+      // '--disable-default-apps',
+      // '--disable-sync',
+      // '--metrics-recording-only',
+      // '--no-default-browser-check',
+      // '--mute-audio',
+      // '--no-crash-upload',
+      // '--disable-background-networking',
+      // '--disable-component-update',
+      // '--disable-domain-reliability',
+      // '--disable-features=AudioServiceOutOfProcess',
+      // '--single-process', // Critical for VPS environments
+      // '--memory-pressure-off',
+      // '--max_old_space_size=4096'
     ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    timeout: 60000, // Increase timeout for slow VPS
-    protocolTimeout: 60000
+    // executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    // timeout: 60000, // Increase timeout for slow VPS
+    // protocolTimeout: 60000
   };
 
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private moduleRef: ModuleRef,
-  ) { }
+  ) {}
 
   async onModuleInit() {
     // Load existing sessions in background
@@ -85,15 +94,23 @@ export class WhatsAppService implements OnModuleInit {
     setInterval(() => this.cleanupStaleConnections(), 600000); // Every 10 minutes
   }
 
-  registerMessageHandler(handler: (message: any, accountId: string) => Promise<void>) {
+  registerMessageHandler(
+    handler: (message: any, accountId: string) => Promise<void>,
+  ) {
     this.logger.log('📝 Registering new message handler');
     this.messageHandlers.push(handler);
   }
 
-  async startSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
+  async startSession(
+    socketClientId: string,
+    userId: string,
+    emit: (event: string, data: any) => void,
+  ) {
     // Prevent duplicate initialization
     if (this.initializationQueue.has(socketClientId)) {
-      this.logger.warn(`🔄 Session initialization already in progress for: ${socketClientId}`);
+      this.logger.warn(
+        `🔄 Session initialization already in progress for: ${socketClientId}`,
+      );
       return this.initializationQueue.get(socketClientId)!;
     }
 
@@ -108,7 +125,11 @@ export class WhatsAppService implements OnModuleInit {
     }
   }
 
-  private async doStartSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
+  private async doStartSession(
+    socketClientId: string,
+    userId: string,
+    emit: (event: string, data: any) => void,
+  ) {
     // Check for existing session
     if (this.socketClientMap.has(socketClientId)) {
       const existingClientId = this.socketClientMap.get(socketClientId)!;
@@ -120,7 +141,9 @@ export class WhatsAppService implements OnModuleInit {
     const clientId = uuidv4();
     const startTime = Date.now();
 
-    this.logger.log(`🚀 Starting session ${clientId} for socket: ${socketClientId}`);
+    this.logger.log(
+      `🚀 Starting session ${clientId} for socket: ${socketClientId}`,
+    );
     this.socketClientMap.set(socketClientId, clientId);
 
     try {
@@ -162,9 +185,10 @@ export class WhatsAppService implements OnModuleInit {
       this.logger.log(`🎉 Session ${clientId} started in ${duration}ms`);
 
       return { clientId };
-
     } catch (error) {
-      this.logger.error(`❌ Failed to start session ${clientId}: ${error.message}`);
+      this.logger.error(
+        `❌ Failed to start session ${clientId}: ${error.message}`,
+      );
 
       // Cleanup on failure
       this.clients.delete(clientId);
@@ -174,14 +198,19 @@ export class WhatsAppService implements OnModuleInit {
       emit('initialization_failed', {
         clientId,
         error: error.message,
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       });
 
       throw error;
     }
   }
 
-  private setupClientEventHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void, userId: string) {
+  private setupClientEventHandlers(
+    client: Client,
+    clientId: string,
+    emit: (event: string, data: any) => void,
+    userId: string,
+  ) {
     // QR Code handler with caching and optimization
     client.on('qr', async (qr) => {
       const qrStartTime = Date.now();
@@ -190,9 +219,12 @@ export class WhatsAppService implements OnModuleInit {
       try {
         // Check cache first
         const cached = this.qrCache.get(qr);
-        if (cached && Date.now() - cached.timestamp < 30000) { // 30 second cache
+        if (cached && Date.now() - cached.timestamp < 30000) {
+          // 30 second cache
           emit('qr', { clientId, qr: cached.dataUrl });
-          this.logger.debug(`⚡ QR served from cache in ${Date.now() - qrStartTime}ms`);
+          this.logger.debug(
+            `⚡ QR served from cache in ${Date.now() - qrStartTime}ms`,
+          );
           return;
         }
 
@@ -204,16 +236,16 @@ export class WhatsAppService implements OnModuleInit {
           margin: 1,
           color: {
             dark: '#000000',
-            light: '#FFFFFF'
+            light: '#FFFFFF',
           },
-          width: 256 // Fixed width for consistency
+          width: 256, // Fixed width for consistency
         });
 
         // Cache the result
         this.qrCache.set(qr, {
           qr,
           dataUrl: qrDataUrl,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
 
         // Emit to frontend
@@ -226,7 +258,6 @@ export class WhatsAppService implements OnModuleInit {
 
         const qrDuration = Date.now() - qrStartTime;
         this.logger.log(`✅ QR generated and sent in ${qrDuration}ms`);
-
       } catch (error) {
         this.logger.error(`❌ QR generation failed: ${error.message}`);
         emit('qr_error', { clientId, error: error.message });
@@ -258,13 +289,15 @@ export class WhatsAppService implements OnModuleInit {
         const phoneNumber = userInfo?.wid?.user || 'Unknown';
         const name = userInfo?.pushname || 'Unknown';
 
-        this.logger.log(`📞 ${clientId} logged in as: ${name} (${phoneNumber})`);
+        this.logger.log(
+          `📞 ${clientId} logged in as: ${name} (${phoneNumber})`,
+        );
 
         // Check for existing account (optimized query)
-        const existingAccount = await this.accountModel.findOne(
-          { phone_number: phoneNumber },
-          { _id: 1, phone_number: 1 }
-        ).lean().exec();
+        const existingAccount = await this.accountModel
+          .findOne({ phone_number: phoneNumber }, { _id: 1, phone_number: 1 })
+          .lean()
+          .exec();
 
         if (existingAccount) {
           this.logger.warn(`⚠️ Phone number already exists: ${phoneNumber}`);
@@ -279,7 +312,7 @@ export class WhatsAppService implements OnModuleInit {
           user: userId,
           clientId,
           status: 'active',
-          created_at: new Date()
+          created_at: new Date(),
         });
 
         emit('ready', {
@@ -287,9 +320,8 @@ export class WhatsAppService implements OnModuleInit {
           name,
           clientId,
           status: 'active',
-          message: 'WhatsApp client ready and account saved.'
+          message: 'WhatsApp client ready and account saved.',
         });
-
       } catch (error) {
         this.logger.error(`❌ Ready handler error: ${error.message}`);
         emit('ready_error', { clientId, error: error.message });
@@ -302,10 +334,12 @@ export class WhatsAppService implements OnModuleInit {
       emit('disconnected', { clientId, reason });
 
       // Update database status
-      await this.accountModel.updateOne(
-        { clientId },
-        { status: 'disconnected', disconnected_at: new Date() }
-      ).exec();
+      await this.accountModel
+        .updateOne(
+          { clientId },
+          { status: 'disconnected', disconnected_at: new Date() },
+        )
+        .exec();
 
       this.performCleanup(clientId);
     });
@@ -316,10 +350,10 @@ export class WhatsAppService implements OnModuleInit {
       if (message.fromMe) return;
 
       // Optimized account lookup
-      const account = await this.accountModel.findOne(
-        { clientId },
-        { _id: 1, user: 1 }
-      ).lean().exec();
+      const account = await this.accountModel
+        .findOne({ clientId }, { _id: 1, user: 1 })
+        .lean()
+        .exec();
 
       if (!account) {
         this.logger.warn(`📱 No account found for client ${clientId}`);
@@ -332,23 +366,30 @@ export class WhatsAppService implements OnModuleInit {
       this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
 
       // Process handlers in parallel
-      const handlerPromises = this.messageHandlers.map(handler =>
-        handler(message, accountId).catch(error =>
-          this.logger.error(`Handler error: ${error.message}`)
-        )
+      const handlerPromises = this.messageHandlers.map((handler) =>
+        handler(message, accountId).catch((error) =>
+          this.logger.error(`Handler error: ${error.message}`),
+        ),
       );
 
       await Promise.allSettled(handlerPromises);
-
     } catch (error) {
       this.logger.error(`❌ Message handling error: ${error.message}`);
     }
   }
 
-  async sendMessage(clientId: string, to: string[], message: string, delayMs: number = 3000) {
+  async sendMessage(
+    clientId: string,
+    to: string[],
+    message: string,
+    delayMs: number = 3000,
+  ) {
     const client = this.clients.get(clientId);
     if (!client) {
-      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
+      throw new HttpException(
+        'Session not found. Please start a new session.',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     // Check if client is ready
@@ -359,8 +400,8 @@ export class WhatsAppService implements OnModuleInit {
         await Promise.race([
           readyPromise,
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Client ready timeout')), 30000)
-          )
+            setTimeout(() => reject(new Error('Client ready timeout')), 30000),
+          ),
         ]);
       }
     }
@@ -369,7 +410,7 @@ export class WhatsAppService implements OnModuleInit {
     if (this.sendingMessages.get(clientId)) {
       throw new HttpException(
         'Already sending messages from this account. Please wait.',
-        HttpStatus.TOO_MANY_REQUESTS
+        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
 
@@ -379,21 +420,29 @@ export class WhatsAppService implements OnModuleInit {
       const results: MessageResult[] = [];
       const batchSize = 5; // Process in small batches
 
-      this.logger.log(`📤 Sending to ${to.length} recipients with ${delayMs}ms delay`);
+      this.logger.log(
+        `📤 Sending to ${to.length} recipients with ${delayMs}ms delay`,
+      );
 
       for (let i = 0; i < to.length; i += batchSize) {
         const batch = to.slice(i, i + batchSize);
 
         const batchPromises = batch.map(async (recipient, batchIndex) => {
-          const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
+          const chatId = recipient.includes('@')
+            ? recipient
+            : `${recipient}@c.us`;
           const globalIndex = i + batchIndex;
 
           try {
             await client.sendMessage(chatId, message);
             results.push({ recipient, status: 'sent' });
-            this.logger.debug(`✅ Sent to ${chatId} (${globalIndex + 1}/${to.length})`);
+            this.logger.debug(
+              `✅ Sent to ${chatId} (${globalIndex + 1}/${to.length})`,
+            );
           } catch (error) {
-            this.logger.error(`❌ Failed to send to ${chatId}: ${error.message}`);
+            this.logger.error(
+              `❌ Failed to send to ${chatId}: ${error.message}`,
+            );
             results.push({ recipient, status: 'failed', error: error.message });
           }
         });
@@ -402,13 +451,12 @@ export class WhatsAppService implements OnModuleInit {
 
         // Apply delay between batches (except for last batch)
         if (i + batchSize < to.length) {
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
       }
 
       this.logger.log(`✅ Completed sending to all recipients`);
       return { message: 'Messages sent', results };
-
     } finally {
       this.sendingMessages.set(clientId, false);
     }
@@ -431,7 +479,8 @@ export class WhatsAppService implements OnModuleInit {
   private cleanupExpiredQRCodes() {
     const now = Date.now();
     for (const [qr, cache] of this.qrCache.entries()) {
-      if (now - cache.timestamp > 300000) { // 5 minutes
+      if (now - cache.timestamp > 300000) {
+        // 5 minutes
         this.qrCache.delete(qr);
       }
     }
@@ -456,10 +505,12 @@ export class WhatsAppService implements OnModuleInit {
           await client.destroy();
         }
 
-        await this.accountModel.updateOne(
-          { clientId },
-          { status: 'disconnected', disconnected_at: new Date() }
-        ).exec();
+        await this.accountModel
+          .updateOne(
+            { clientId },
+            { status: 'disconnected', disconnected_at: new Date() },
+          )
+          .exec();
 
         this.performCleanup(clientId);
         this.logger.log(`🗑️ Cleaned up client ${clientId}`);
@@ -493,12 +544,16 @@ export class WhatsAppService implements OnModuleInit {
       return;
     }
 
-    const sessionFiles = fs.readdirSync(authDir).filter(file => file.startsWith('session-'));
+    const sessionFiles = fs
+      .readdirSync(authDir)
+      .filter((file) => file.startsWith('session-'));
     this.logger.log(`📂 Found ${sessionFiles.length} session files to load`);
 
     // Load sessions in parallel with concurrency limit
     const concurrencyLimit = 3;
-    const semaphore = Array(concurrencyLimit).fill(null).map(() => Promise.resolve());
+    const semaphore = Array(concurrencyLimit)
+      .fill(null)
+      .map(() => Promise.resolve());
 
     const loadPromises = sessionFiles.map(async (file, index) => {
       // Wait for available slot
@@ -506,14 +561,16 @@ export class WhatsAppService implements OnModuleInit {
       await semaphore[slot];
 
       const promise = this.loadSingleSession(file);
-      semaphore[slot] = promise.catch(() => { }); // Don't let failures block other slots
+      semaphore[slot] = promise.catch(() => {}); // Don't let failures block other slots
       return promise;
     });
 
     const results = await Promise.allSettled(loadPromises);
-    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const successful = results.filter((r) => r.status === 'fulfilled').length;
 
-    this.logger.log(`✅ Loaded ${successful}/${sessionFiles.length} sessions successfully`);
+    this.logger.log(
+      `✅ Loaded ${successful}/${sessionFiles.length} sessions successfully`,
+    );
   }
 
   private async loadSingleSession(file: string): Promise<void> {
@@ -550,11 +607,15 @@ export class WhatsAppService implements OnModuleInit {
       });
 
       client.on('disconnected', async (reason) => {
-        this.logger.warn(`🔌 Loaded session ${clientId} disconnected: ${reason}`);
-        await this.accountModel.updateOne(
-          { clientId },
-          { status: 'disconnected', disconnected_at: new Date() }
-        ).exec();
+        this.logger.warn(
+          `🔌 Loaded session ${clientId} disconnected: ${reason}`,
+        );
+        await this.accountModel
+          .updateOne(
+            { clientId },
+            { status: 'disconnected', disconnected_at: new Date() },
+          )
+          .exec();
         await this.cleanupSession(sessionPath);
         this.clients.delete(clientId);
       });
@@ -564,9 +625,10 @@ export class WhatsAppService implements OnModuleInit {
       this.clients.set(clientId, client);
 
       this.logger.debug(`✅ Session ${clientId} loaded successfully`);
-
     } catch (error) {
-      this.logger.error(`❌ Failed to load session ${clientId}: ${error.message}`);
+      this.logger.error(
+        `❌ Failed to load session ${clientId}: ${error.message}`,
+      );
       await this.cleanupSession(sessionPath);
     }
   }
@@ -595,17 +657,20 @@ export class WhatsAppService implements OnModuleInit {
       }
 
       const files = fs.readdirSync(defaultPath);
-      const hasRequiredFiles = files.some(file =>
-        file.includes('Cookies') ||
-        file.includes('Local State') ||
-        file.includes('Preferences')
+      const hasRequiredFiles = files.some(
+        (file) =>
+          file.includes('Cookies') ||
+          file.includes('Local State') ||
+          file.includes('Preferences'),
       );
 
       // Check for minimum file count and required files
       const isValid = hasRequiredFiles && files.length > 2;
 
       if (!isValid) {
-        this.logger.debug(`Invalid session detected: ${sessionPath} (${files.length} files)`);
+        this.logger.debug(
+          `Invalid session detected: ${sessionPath} (${files.length} files)`,
+        );
       }
 
       return isValid;
@@ -621,14 +686,17 @@ export class WhatsAppService implements OnModuleInit {
         return;
       }
 
-      const sessionDirs = fs.readdirSync(authDir)
-        .filter(dir => dir.startsWith('session-'))
-        .map(dir => path.join(authDir, dir));
+      const sessionDirs = fs
+        .readdirSync(authDir)
+        .filter((dir) => dir.startsWith('session-'))
+        .map((dir) => path.join(authDir, dir));
 
       for (const sessionPath of sessionDirs) {
         const flagFile = path.join(sessionPath, '.cleanup_required');
         if (fs.existsSync(flagFile)) {
-          this.logger.log(`🧹 Attempting cleanup of marked session: ${sessionPath}`);
+          this.logger.log(
+            `🧹 Attempting cleanup of marked session: ${sessionPath}`,
+          );
           await this.forceRemoveDirectory(sessionPath);
         }
       }
@@ -657,7 +725,10 @@ export class WhatsAppService implements OnModuleInit {
       await this.alternativeCleanup(sessionPath);
     }
   }
-  private async forceRemoveDirectory(dirPath: string, retries: number = 3): Promise<void> {
+  private async forceRemoveDirectory(
+    dirPath: string,
+    retries: number = 3,
+  ): Promise<void> {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         // Method 1: Use fs.rm with force and recursive (Node.js 14.14+)
@@ -666,7 +737,7 @@ export class WhatsAppService implements OnModuleInit {
             recursive: true,
             force: true,
             maxRetries: 3,
-            retryDelay: 100
+            retryDelay: 100,
           });
           return;
         }
@@ -674,16 +745,17 @@ export class WhatsAppService implements OnModuleInit {
         // Method 2: Fallback to rmdir with recursive
         await fs.promises.rmdir(dirPath, { recursive: true });
         return;
-
       } catch (error) {
-        this.logger.warn(`🔄 Cleanup attempt ${attempt}/${retries} failed: ${error.message}`);
+        this.logger.warn(
+          `🔄 Cleanup attempt ${attempt}/${retries} failed: ${error.message}`,
+        );
 
         if (attempt === retries) {
           throw error;
         }
 
         // Wait before retry
-        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       }
     }
   }
@@ -700,7 +772,6 @@ export class WhatsAppService implements OnModuleInit {
 
       // Method 1: Manual recursive deletion
       await this.recursiveDelete(sessionPath);
-
     } catch (error) {
       this.logger.error(`💥 Alternative cleanup also failed: ${error.message}`);
 
@@ -720,9 +791,7 @@ export class WhatsAppService implements OnModuleInit {
 
       // Delete all contents first
       await Promise.all(
-        entries.map(entry =>
-          this.recursiveDelete(path.join(dirPath, entry))
-        )
+        entries.map((entry) => this.recursiveDelete(path.join(dirPath, entry))),
       );
 
       // Then delete the directory itself
@@ -774,13 +843,15 @@ export class WhatsAppService implements OnModuleInit {
   private markForManualCleanup(sessionPath: string): void {
     try {
       const flagFile = path.join(sessionPath, '.cleanup_required');
-      fs.writeFileSync(flagFile, `Cleanup required at: ${new Date().toISOString()}`);
+      fs.writeFileSync(
+        flagFile,
+        `Cleanup required at: ${new Date().toISOString()}`,
+      );
       this.logger.warn(`🏷️ Marked for manual cleanup: ${sessionPath}`);
     } catch (error) {
       this.logger.error(`Failed to mark for cleanup: ${error.message}`);
     }
   }
-
 
   /**
    * Get detailed client information
@@ -793,10 +864,13 @@ export class WhatsAppService implements OnModuleInit {
 
     try {
       const info = client.info;
-      const account = await this.accountModel.findOne(
-        { clientId },
-        { name: 1, phone_number: 1, status: 1, created_at: 1 }
-      ).lean().exec();
+      const account = await this.accountModel
+        .findOne(
+          { clientId },
+          { name: 1, phone_number: 1, status: 1, created_at: 1 },
+        )
+        .lean()
+        .exec();
 
       return {
         clientId,
@@ -805,10 +879,10 @@ export class WhatsAppService implements OnModuleInit {
         whatsappInfo: {
           phoneNumber: info?.wid?.user || 'Unknown',
           name: info?.pushname || 'Unknown',
-          platform: info?.platform || 'Unknown'
+          platform: info?.platform || 'Unknown',
         },
         accountInfo: account,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
     } catch (error) {
       this.logger.error(`❌ Error getting client info: ${error.message}`);
@@ -821,7 +895,9 @@ export class WhatsAppService implements OnModuleInit {
    */
   getHealthStatus() {
     const totalClients = this.clients.size;
-    const activeSending = Array.from(this.sendingMessages.values()).filter(Boolean).length;
+    const activeSending = Array.from(this.sendingMessages.values()).filter(
+      Boolean,
+    ).length;
     const qrCacheSize = this.qrCache.size;
 
     return {
@@ -831,13 +907,13 @@ export class WhatsAppService implements OnModuleInit {
         activeSending,
         qrCacheSize,
         initializationQueue: this.initializationQueue.size,
-        socketMappings: this.socketClientMap.size
+        socketMappings: this.socketClientMap.size,
       },
       memory: {
         used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
       },
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
   }
 
@@ -854,10 +930,12 @@ export class WhatsAppService implements OnModuleInit {
       this.performCleanup(clientId);
 
       // Update database
-      await this.accountModel.updateOne(
-        { clientId },
-        { status: 'force_disconnected', disconnected_at: new Date() }
-      ).exec();
+      await this.accountModel
+        .updateOne(
+          { clientId },
+          { status: 'force_disconnected', disconnected_at: new Date() },
+        )
+        .exec();
 
       this.logger.log(`🔨 Force cleaned up client: ${clientId}`);
       return true;

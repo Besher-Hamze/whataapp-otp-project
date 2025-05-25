@@ -23,7 +23,7 @@ interface AuthenticatedSocket extends Socket {
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  path: '/whatsapp',
+  path: '',
   transports: ['websocket'], // Use only websocket for better performance
   pingTimeout: 60000,
   pingInterval: 25000

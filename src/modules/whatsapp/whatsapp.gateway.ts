@@ -16,178 +16,374 @@ import {
 import { Types } from 'mongoose';
 import { verify } from 'jsonwebtoken';
 
-@WebSocketGateway({ cors: { origin: '*' }, path: '' })
+interface AuthenticatedSocket extends Socket {
+  userId?: string;
+  isAuthenticated?: boolean;
+}
+
+@WebSocketGateway({
+  cors: { origin: '*' },
+  path: '/whatsapp',
+  transports: ['websocket'], // Use only websocket for better performance
+  pingTimeout: 60000,
+  pingInterval: 25000
+})
 export class WhatsAppGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+
   @WebSocketServer() server: Server;
-  private logger: Logger = new Logger('WhatsAppGateway');
-  private clientIdMap: Map<string, string> = new Map(); // Maps socket.id to WhatsApp clientId
-  private socketClientMap: Map<string, string> = new Map();
-  private userSockets: Map<string, Set<string>> = new Map(); // Maps userId to set of socket.ids
+  private readonly logger = new Logger('WhatsAppGateway');
+
+  // Optimized data structures
+  private readonly clientIdMap = new Map<string, string>(); // socket.id -> WhatsApp clientId
+  private readonly userSockets = new Map<string, Set<string>>(); // userId -> socket.ids
+  private readonly socketAuth = new Map<string, string>(); // socket.id -> userId
+
+  // Performance tracking
+  private readonly connectionStats = {
+    total: 0,
+    authenticated: 0,
+    sessions: 0
+  };
 
   constructor(private readonly whatsappService: WhatsAppService) { }
 
-  async afterInit() {
-    this.logger.log('WebSocket Gateway initialized');
+  afterInit() {
+    this.logger.log('🚀 WebSocket Gateway initialized with optimizations');
+
+    // Setup periodic cleanup
+    setInterval(() => this.cleanupDisconnectedSockets(), 30000);
   }
 
-  handleConnection(client: Socket) {
-    this.logger.log(`Client connected: ${client.id}`);
+  handleConnection(client: AuthenticatedSocket) {
+    this.connectionStats.total++;
+    this.logger.debug(`📱 Client connected: ${client.id} (Total: ${this.connectionStats.total})`);
 
-    // Attempt to get token and authenticate user on connection
-    const token = client.handshake.headers.authorization?.split(' ')[1] ||
-      client.handshake.auth?.token;
+    // Immediate authentication attempt
+    this.authenticateSocket(client);
 
-    if (token) {
-      try {
-        const payload = verify(token, process.env.JWT_SECRET!) as { sub: string };
-        const userId = payload.sub;
-
-        if (Types.ObjectId.isValid(userId)) {
-          // Add socket to user's socket set
-          if (!this.userSockets.has(userId)) {
-            this.userSockets.set(userId, new Set());
-          }
-
-          const userSocketSet = this.userSockets.get(userId);
-          if (userSocketSet) {
-            userSocketSet.add(client.id);
-            this.logger.log(`Socket ${client.id} authenticated for user ${userId}`);
-          }
-        }
-      } catch (err) {
-        // Authentication failed, but we'll still allow connection
-        // and properly authenticate when needed for specific operations
-        this.logger.debug(`Socket ${client.id} connected without valid authentication`);
-      }
-    }
+    // Send immediate acknowledgment
+    client.emit('connected', {
+      socketId: client.id,
+      timestamp: Date.now(),
+      authenticated: client.isAuthenticated
+    });
   }
 
-  handleDisconnect(client: Socket) {
+  handleDisconnect(client: AuthenticatedSocket) {
     const socketId = client.id;
-    this.logger.log(`Client disconnected: ${socketId}`);
+    this.connectionStats.total--;
 
-    // Remove from user sockets map
-    for (const [userId, sockets] of this.userSockets.entries()) {
-      if (sockets.has(socketId)) {
-        sockets.delete(socketId);
-        this.logger.debug(`Removed socket ${socketId} from user ${userId}`);
+    this.logger.debug(`📱 Client disconnected: ${socketId}`);
 
-        // Clean up if no more sockets for this user
-        if (sockets.size === 0) {
-          this.userSockets.delete(userId);
-        }
+    // Quick cleanup
+    this.cleanupSocketData(socketId);
 
-        break;
-      }
-    }
-
-    // Delay disconnection to allow WhatsApp client to reach 'ready'
-    setTimeout(() => {
+    // Async WhatsApp client disconnect (non-blocking)
+    setImmediate(() => {
       this.whatsappService.disconnectClient(socketId);
-    }, 3000);
+    });
+  }
+
+  @SubscribeMessage('authenticate')
+  async handleAuthenticate(client: AuthenticatedSocket, data: { token: string }) {
+    try {
+      const userId = await this.validateToken(data.token);
+      this.setSocketAuthentication(client, userId);
+
+      client.emit('authenticated', {
+        userId,
+        socketId: client.id,
+        timestamp: Date.now()
+      });
+
+      return { success: true, userId };
+    } catch (error) {
+      client.emit('auth_error', { message: error.message });
+      return { success: false, error: error.message };
+    }
   }
 
   @SubscribeMessage('init')
-  async handleStartSession(client: Socket) {
-    this.logger.log(`Starting WhatsApp session for client: ${client.id}`);
-    const token = client.handshake.headers.authorization?.split(' ')[1] ||
-      client.handshake.auth?.token;
+  async handleStartSession(client: AuthenticatedSocket, data?: { token?: string }) {
+    const startTime = Date.now();
+    this.logger.log(`🔄 Starting WhatsApp session for: ${client.id}`);
 
-    if (!token) {
-      client.emit('error', {
-        message: 'Missing or invalid Authorization header',
+    try {
+      // Fast authentication check
+      let userId = client.userId;
+
+      if (!userId && data?.token) {
+        userId = await this.validateToken(data.token);
+        this.setSocketAuthentication(client, userId);
+      }
+
+      if (!userId) {
+        throw new UnauthorizedException('Authentication required');
+      }
+
+      // Emit session starting immediately
+      client.emit('session_starting', {
+        socketId: client.id,
+        timestamp: Date.now()
       });
-      throw new UnauthorizedException('Missing or invalid Authorization header');
-    }
 
-    this.logger.debug(`Token received for session initialization`);
-
-    let userId: string;
-    try {
-      const payload = verify(token, process.env.JWT_SECRET!) as { sub: string };
-      userId = payload.sub;
-      if (!Types.ObjectId.isValid(userId)) {
-        client.emit('error', {
-          message: 'Invalid userId in token: must be a valid ObjectId',
-        });
-        throw new BadRequestException('Invalid userId in token');
-      }
-
-      // Add socket to user's socket set
-      if (!this.userSockets.has(userId)) {
-        this.userSockets.set(userId, new Set());
-      }
-
-      const userSocketSet = this.userSockets.get(userId);
-      if (userSocketSet) {
-        userSocketSet.add(client.id);
-      }
-
-    } catch (err) {
-      client.emit('error', { message: 'Invalid or expired token' });
-      throw new UnauthorizedException('Invalid or expired token');
-    }
-
-    try {
+      // Start session with optimized callback
       const { clientId } = await this.whatsappService.startSession(
         client.id,
         userId,
-        (event, data) => {
-          if (this.clientIdMap.has(client.id)) {
-            client.emit(event, data); // Emit to the specific client
-          }
-        },
+        (event, data) => this.emitToSocket(client.id, event, data)
       );
 
       if (clientId) {
         this.clientIdMap.set(client.id, clientId);
+        this.connectionStats.sessions++;
       }
-      return { clientId };
-    } catch (err) {
-      client.emit('error', {
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Session started in ${duration}ms for ${client.id}`);
+
+      return {
+        success: true,
+        clientId,
+        duration,
+        timestamp: Date.now()
+      };
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ Session failed in ${duration}ms: ${error.message}`);
+
+      client.emit('session_error', {
         message: 'Failed to start WhatsApp session',
-        details: err.message,
+        details: error.message,
+        duration
       });
-      throw new BadRequestException('Failed to start WhatsApp session');
+
+      throw new BadRequestException(error.message);
     }
   }
 
   @SubscribeMessage('send-message')
   async handleSendMessage(
-    client: Socket,
-    payload: { clientId: string; to: string[]; message: string; delay?: number },
+    client: AuthenticatedSocket,
+    payload: {
+      clientId: string;
+      to: string[];
+      message: string;
+      delay?: number;
+      batchSize?: number;
+    }
   ) {
-    this.logger.log(`Sending message for client: ${client.id}`);
-    const delay = payload.delay || 5000; // Default 5 seconds if not provided
+    const startTime = Date.now();
+    this.logger.log(`📤 Sending message for client: ${client.id}`);
 
-    return await this.whatsappService.sendMessage(
-      payload.clientId,
-      payload.to,
-      payload.message,
-      delay,
-    ) as any;
+    try {
+      // Validate payload
+      if (!payload.clientId || !payload.to?.length || !payload.message?.trim()) {
+        throw new BadRequestException('Invalid message payload');
+      }
+
+      // Set reasonable defaults
+      const delay = Math.max(payload.delay || 3000, 1000); // Min 1 second
+      const batchSize = Math.min(payload.batchSize || 50, 100); // Max 100 per batch
+
+      // Emit sending started
+      client.emit('message_sending_started', {
+        clientId: payload.clientId,
+        recipientCount: payload.to.length,
+        timestamp: Date.now()
+      });
+
+      const result = await this.whatsappService.sendMessage(
+        payload.clientId,
+        payload.to,
+        payload.message,
+        delay
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Message sent in ${duration}ms`);
+
+      // Emit completion
+      client.emit('message_sending_completed', {
+        ...result,
+        duration,
+        timestamp: Date.now()
+      });
+
+      return result as any;
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ Message failed in ${duration}ms: ${error.message}`);
+
+      client.emit('message_sending_failed', {
+        error: error.message,
+        duration,
+        timestamp: Date.now()
+      });
+
+      throw error;
+    }
+  }
+
+  @SubscribeMessage('get_session_status')
+  async handleGetSessionStatus(client: AuthenticatedSocket) {
+    const clientId = this.clientIdMap.get(client.id);
+    const isReady = clientId ? this.whatsappService.isClientReady(clientId) : false;
+
+    return {
+      socketId: client.id,
+      clientId: clientId || null,
+      isReady,
+      isAuthenticated: client.isAuthenticated,
+      timestamp: Date.now()
+    };
+  }
+
+  @SubscribeMessage('get_stats')
+  async handleGetStats(client: AuthenticatedSocket) {
+    return {
+      ...this.connectionStats,
+      activeClients: this.whatsappService.getActiveSessionCount(),
+      timestamp: Date.now()
+    };
+  }
+
+  // ================== PRIVATE METHODS ==================
+
+  private authenticateSocket(client: AuthenticatedSocket) {
+    const token = client.handshake.headers.authorization?.split(' ')[1] ||
+      client.handshake.auth?.token ||
+      client.handshake.query?.token;
+
+    if (token) {
+      try {
+        const userId = this.validateTokenSync(token);
+        this.setSocketAuthentication(client, userId);
+      } catch (error) {
+        this.logger.debug(`Socket ${client.id} auth failed: ${error.message}`);
+      }
+    }
+  }
+
+  private async validateToken(token: string): Promise<string> {
+    if (!token) {
+      throw new UnauthorizedException('Token required');
+    }
+
+    try {
+      const payload = verify(token, process.env.JWT_SECRET!) as { sub: string };
+      const userId = payload.sub;
+
+      if (!Types.ObjectId.isValid(userId)) {
+        throw new BadRequestException('Invalid userId format');
+      }
+
+      return userId;
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        throw new UnauthorizedException('Token expired');
+      }
+      throw new UnauthorizedException('Invalid token');
+    }
+  }
+
+  private validateTokenSync(token: string): string {
+    const payload = verify(token, process.env.JWT_SECRET!) as { sub: string };
+    const userId = payload.sub;
+
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid userId format');
+    }
+
+    return userId;
+  }
+
+  private setSocketAuthentication(client: AuthenticatedSocket, userId: string) {
+    client.userId = userId;
+    client.isAuthenticated = true;
+
+    // Update tracking maps
+    this.socketAuth.set(client.id, userId);
+
+    if (!this.userSockets.has(userId)) {
+      this.userSockets.set(userId, new Set());
+    }
+    this.userSockets.get(userId)!.add(client.id);
+
+    this.connectionStats.authenticated++;
+    this.logger.debug(`✅ Socket ${client.id} authenticated for user ${userId}`);
+  }
+
+  private cleanupSocketData(socketId: string) {
+    // Remove from clientId map
+    this.clientIdMap.delete(socketId);
+
+    // Remove from user sockets
+    const userId = this.socketAuth.get(socketId);
+    if (userId) {
+      const userSocketSet = this.userSockets.get(userId);
+      if (userSocketSet) {
+        userSocketSet.delete(socketId);
+        if (userSocketSet.size === 0) {
+          this.userSockets.delete(userId);
+        }
+      }
+      this.socketAuth.delete(socketId);
+      this.connectionStats.authenticated--;
+    }
+  }
+
+  private cleanupDisconnectedSockets() {
+    const connectedSockets = new Set(this.server.sockets.sockets.keys());
+
+    for (const [socketId] of this.socketAuth) {
+      if (!connectedSockets.has(socketId)) {
+        this.cleanupSocketData(socketId);
+      }
+    }
+  }
+
+  private emitToSocket(socketId: string, event: string, data: any) {
+    const socket = this.server.sockets.sockets.get(socketId);
+    if (socket) {
+      socket.emit(event, { ...data, timestamp: Date.now() });
+    }
   }
 
   /**
-   * Broadcast message status updates to all connected sockets of a specific user
-   * @param userId User ID
-   * @param event Event name
-   * @param data Event data
+   * Optimized method to broadcast to all user sockets
    */
   broadcastToUser(userId: string, event: string, data: any) {
     const userSocketSet = this.userSockets.get(userId);
-    if (!userSocketSet || userSocketSet.size === 0) {
-      this.logger.debug(`No active sockets for user ${userId}`);
+    if (!userSocketSet?.size) {
       return;
     }
 
-    this.logger.debug(`Broadcasting ${event} to ${userSocketSet.size} sockets of user ${userId}`);
-    for (const socketId of userSocketSet) {
-      const socket = this.server.sockets.sockets.get(socketId);
-      if (socket) {
-        socket.emit(event, data);
-      }
+    const payload = { ...data, timestamp: Date.now() };
+
+    // Use batch emit for better performance
+    const socketsToEmit = Array.from(userSocketSet)
+      .map(id => this.server.sockets.sockets.get(id))
+      .filter(Boolean);
+
+    if (socketsToEmit.length > 0) {
+      this.logger.debug(`📡 Broadcasting ${event} to ${socketsToEmit.length} sockets`);
+      socketsToEmit.forEach(socket => socket!.emit(event, payload));
     }
+  }
+
+  /**
+   * Get connection statistics
+   */
+  getConnectionStats() {
+    return {
+      ...this.connectionStats,
+      activeConnections: this.server.sockets.sockets.size,
+      authenticatedUsers: this.userSockets.size,
+      timestamp: Date.now()
+    };
   }
 }

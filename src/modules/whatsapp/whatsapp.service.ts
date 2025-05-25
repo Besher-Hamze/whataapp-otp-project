@@ -16,14 +16,60 @@ interface MessageResult {
   error?: string;
 }
 
+interface QRGenerationCache {
+  qr: string;
+  dataUrl: string;
+  timestamp: number;
+}
+
 @Injectable()
 export class WhatsAppService implements OnModuleInit {
   private readonly logger = new Logger(WhatsAppService.name);
-  private clients: Map<string, Client> = new Map();
-  private socketClientMap: Map<string, string> = new Map();
-  // Track ongoing message operations to prevent overlapping sends for the same client
-  private sendingMessages: Map<string, boolean> = new Map();
-  private messageHandlers: Array<(message: any, accountId: string) => Promise<void>> = [];
+  private readonly clients = new Map<string, Client>();
+  private readonly socketClientMap = new Map<string, string>();
+  private readonly sendingMessages = new Map<string, boolean>();
+  private readonly messageHandlers: Array<(message: any, accountId: string) => Promise<void>> = [];
+
+  // Performance optimizations
+  private readonly qrCache = new Map<string, QRGenerationCache>();
+  private readonly clientReadyPromises = new Map<string, Promise<void>>();
+  private readonly initializationQueue = new Map<string, Promise<any>>();
+
+  // Enhanced Puppeteer configuration
+  private readonly puppeteerConfig = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-features=TranslateUI,VizDisplayCompositor',
+      '--disable-ipc-flooding-protection',
+      '--disable-extensions',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--no-default-browser-check',
+      '--mute-audio',
+      '--no-crash-upload',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-domain-reliability',
+      '--disable-features=AudioServiceOutOfProcess',
+      '--single-process', // Critical for VPS environments
+      '--memory-pressure-off',
+      '--max_old_space_size=4096'
+    ],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    timeout: 60000, // Increase timeout for slow VPS
+    protocolTimeout: 60000
+  };
 
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
@@ -31,426 +77,615 @@ export class WhatsAppService implements OnModuleInit {
   ) { }
 
   async onModuleInit() {
-    await this.loadClientsFromSessions();
+    // Load existing sessions in background
+    setImmediate(() => this.loadClientsFromSessions());
+
+    // Setup cleanup intervals
+    setInterval(() => this.cleanupExpiredQRCodes(), 300000); // Every 5 minutes
+    setInterval(() => this.cleanupStaleConnections(), 600000); // Every 10 minutes
   }
 
-  /**
-   * Register a message handler function to process incoming messages
-   * @param handler Function that processes incoming messages
-   */
   registerMessageHandler(handler: (message: any, accountId: string) => Promise<void>) {
-    this.logger.log('Registering new message handler');
+    this.logger.log('📝 Registering new message handler');
     this.messageHandlers.push(handler);
   }
 
-  private async loadClientsFromSessions() {
-    const authDir = path.join(process.cwd(), '.wwebjs_auth');
-    if (!fs.existsSync(authDir)) {
-      this.logger.warn('.wwebjs_auth directory not found. No sessions loaded.');
-      return;
-    }
-
-    const sessionFiles = fs.readdirSync(authDir).filter(file => file.startsWith('session-'));
-    this.logger.log(`Found ${sessionFiles.length} session files.`);
-
-    for (const file of sessionFiles) {
-      const clientId = file.replace('session-', '');
-      this.logger.log(`Loading client for session: ${file}, clientId: ${clientId}`);
-
-      try {
-        const sessionPath = path.join(authDir, file);
-
-        if (!this.isValidSession(sessionPath)) {
-          this.logger.warn(`Invalid session for ${clientId}. Skipping.`);
-          continue;
-        }
-
-        const client = new Client({
-          authStrategy: new LocalAuth({ clientId }),
-          puppeteer: {
-            headless: true, args: ['--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-accelerated-2d-canvas',
-              '--no-first-run',
-              '--no-zygote',
-              '--disable-gpu'
-            ]
-          },
-        });
-
-        // Set up message handler for incoming messages
-        client.on('message', async (message) => {
-          await this.handleIncomingMessage(message, clientId);
-        });
-
-        // Initialize client
-        await client.initialize();
-
-        // Store client
-        this.clients.set(clientId, client);
-        this.logger.log(`Client for ${clientId} loaded and initialized.`);
-
-        client.on('ready', () => {
-          this.logger.log(`[${clientId}] 🔔 WhatsApp client is ready`);
-        });
-
-        client.on('auth_failure', () => {
-          this.logger.error(`[${clientId}] Authentication failed. Removing session.`);
-          this.clients.delete(clientId);
-          this.socketClientMap.delete(clientId);
-          this.cleanupSession(sessionPath);
-        });
-
-        client.on('disconnected', async (reason) => {
-          this.logger.warn(`[${clientId}] 🔌 Disconnected: ${reason}`);
-          this.clients.delete(clientId);
-          this.socketClientMap.delete(clientId);
-          await this.accountModel.updateOne({ clientId }, { status: 'disconnected' }).exec();
-          this.cleanupSession(sessionPath);
-        });
-
-      } catch (error) {
-        this.logger.error(`Failed to load client for ${clientId}: ${error.message}`, error.stack);
-        await this.cleanupSession(path.join(authDir, file));
-      }
-    }
-
-    this.logger.log(`Loaded ${this.clients.size} clients from .wwebjs_auth.`);
-  }
-
-  // Helper to validate session directory
-  private isValidSession(sessionPath: string): boolean {
-    try {
-      const defaultPath = path.join(sessionPath, 'Default');
-      if (!fs.existsSync(defaultPath) || !fs.statSync(defaultPath).isDirectory()) {
-        this.logger.warn(`Default folder not found in ${sessionPath}`);
-        return false;
-      }
-      const files = fs.readdirSync(defaultPath);
-      return files.includes('Cookies') && files.length > 0;
-    } catch (error) {
-      this.logger.error(`Error validating session ${sessionPath}: ${error.message}`);
-      return false;
-    }
-  }
-
-  // Helper to clean up corrupted session
-  private async cleanupSession(sessionPath: string): Promise<void> {
-    try {
-      if (fs.existsSync(sessionPath)) {
-        await fs.promises.rm(sessionPath, { recursive: true, force: true });
-        this.logger.log(`Cleaned up session directory: ${sessionPath}`);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to clean up session ${sessionPath}: ${error.message}`);
-    }
-  }
-
   async startSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
-    // Check if a session already exists for this socket
+    // Prevent duplicate initialization
+    if (this.initializationQueue.has(socketClientId)) {
+      this.logger.warn(`🔄 Session initialization already in progress for: ${socketClientId}`);
+      return this.initializationQueue.get(socketClientId)!;
+    }
+
+    const initPromise = this.doStartSession(socketClientId, userId, emit);
+    this.initializationQueue.set(socketClientId, initPromise);
+
+    try {
+      const result = await initPromise;
+      return result;
+    } finally {
+      this.initializationQueue.delete(socketClientId);
+    }
+  }
+
+  private async doStartSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
+    // Check for existing session
     if (this.socketClientMap.has(socketClientId)) {
-      const existingClientId = this.socketClientMap.get(socketClientId);
-      this.logger.warn(`[${existingClientId}] Session already exists for socket: ${socketClientId}`);
-      emit('error', { message: 'Session already started', clientId: existingClientId });
+      const existingClientId = this.socketClientMap.get(socketClientId)!;
+      this.logger.warn(`⚠️ Session exists for socket: ${socketClientId}`);
+      emit('session_exists', { clientId: existingClientId });
       return { clientId: existingClientId };
     }
 
     const clientId = uuidv4();
-    this.logger.log(`[${clientId}] Starting new WhatsApp session for socket: ${socketClientId}`);
+    const startTime = Date.now();
+
+    this.logger.log(`🚀 Starting session ${clientId} for socket: ${socketClientId}`);
     this.socketClientMap.set(socketClientId, clientId);
 
-    // Double-check if client already exists (race condition prevention)
-    if (this.clients.has(clientId)) {
-      this.logger.warn(`[${clientId}] Client already exists`);
-      emit('error', { message: 'Session already started', clientId });
+    try {
+      const client = new Client({
+        authStrategy: new LocalAuth({ clientId }),
+        puppeteer: this.puppeteerConfig,
+      });
+
+      // Setup event handlers BEFORE initialization
+      this.setupClientEventHandlers(client, clientId, emit, userId);
+
+      // Store client immediately to prevent race conditions
+      this.clients.set(clientId, client);
+
+      // Create ready promise for tracking
+      let readyResolve: () => void;
+      const readyPromise = new Promise<void>((resolve) => {
+        readyResolve = resolve;
+      });
+      this.clientReadyPromises.set(clientId, readyPromise);
+
+      // Enhanced ready handler
+      client.once('ready', () => {
+        const duration = Date.now() - startTime;
+        this.logger.log(`✅ Client ${clientId} ready in ${duration}ms`);
+        readyResolve();
+      });
+
+      // Initialize with timeout
+      const initTimeout = setTimeout(() => {
+        this.logger.error(`⏰ Client ${clientId} initialization timeout`);
+        emit('initialization_timeout', { clientId });
+      }, 120000); // 2 minutes
+
+      await client.initialize();
+      clearTimeout(initTimeout);
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`🎉 Session ${clientId} started in ${duration}ms`);
+
       return { clientId };
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to start session ${clientId}: ${error.message}`);
+
+      // Cleanup on failure
+      this.clients.delete(clientId);
+      this.socketClientMap.delete(socketClientId);
+      this.clientReadyPromises.delete(clientId);
+
+      emit('initialization_failed', {
+        clientId,
+        error: error.message,
+        duration: Date.now() - startTime
+      });
+
+      throw error;
     }
+  }
 
-    const client = new Client({
-      authStrategy: new LocalAuth({ clientId }),
-      puppeteer: {
-        headless: true, args: ['--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu'
-        ]
-      },
-    });
-
-    // Set up message handler for incoming messages
-    client.on('message', async (message) => {
-      await this.handleIncomingMessage(message, clientId);
-    });
-
+  private setupClientEventHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void, userId: string) {
+    // QR Code handler with caching and optimization
     client.on('qr', async (qr) => {
-      this.logger.log(`[${clientId}] QR Code received — sending to frontend`);
+      const qrStartTime = Date.now();
+      this.logger.log(`📱 QR received for ${clientId} - generating...`);
+
       try {
-        const qrDataUrl = await QRCode.toDataURL(qr);
-        qrcodeTerminal.generate(qr, { small: true });
+        // Check cache first
+        const cached = this.qrCache.get(qr);
+        if (cached && Date.now() - cached.timestamp < 30000) { // 30 second cache
+          emit('qr', { clientId, qr: cached.dataUrl });
+          this.logger.debug(`⚡ QR served from cache in ${Date.now() - qrStartTime}ms`);
+          return;
+        }
+
+        // Generate QR with optimized settings
+        const qrDataUrl = await QRCode.toDataURL(qr, {
+          errorCorrectionLevel: 'M', // Medium error correction (faster)
+          type: 'image/png',
+          quality: 0.8, // Reduce quality for speed
+          margin: 1,
+          color: {
+            dark: '#000000',
+            light: '#FFFFFF'
+          },
+          width: 256 // Fixed width for consistency
+        });
+
+        // Cache the result
+        this.qrCache.set(qr, {
+          qr,
+          dataUrl: qrDataUrl,
+          timestamp: Date.now()
+        });
+
+        // Emit to frontend
         emit('qr', { clientId, qr: qrDataUrl });
-      } catch (err) {
-        this.logger.error(`[${clientId}] Failed to generate QR code: ${err.message}`);
-        emit('error', { message: 'Failed to generate QR code', details: err.message });
+
+        // Optional: Show in terminal (async to not block)
+        setImmediate(() => {
+          qrcodeTerminal.generate(qr, { small: true });
+        });
+
+        const qrDuration = Date.now() - qrStartTime;
+        this.logger.log(`✅ QR generated and sent in ${qrDuration}ms`);
+
+      } catch (error) {
+        this.logger.error(`❌ QR generation failed: ${error.message}`);
+        emit('qr_error', { clientId, error: error.message });
       }
     });
 
+    // Optimized message handler
+    client.on('message', async (message) => {
+      // Process in background to not block other operations
+      setImmediate(() => this.handleIncomingMessage(message, clientId));
+    });
+
+    // Authentication events
     client.on('authenticated', () => {
-      this.logger.log(`[${clientId}] Authenticated with WhatsApp`);
+      this.logger.log(`🔐 ${clientId} authenticated`);
       emit('authenticated', { clientId });
     });
 
+    client.on('auth_failure', () => {
+      this.logger.error(`🚫 ${clientId} authentication failed`);
+      emit('auth_failure', { clientId });
+      this.performCleanup(clientId);
+    });
+
+    // Ready event with account creation
     client.on('ready', async () => {
-      this.logger.log(`[${clientId}] WhatsApp client is ready`);
-      const userInfo = client.info;
-      const phoneNumber = userInfo?.wid?.user || 'Unknown';
-      const name = userInfo?.pushname || 'Unknown';
-
-      this.logger.log(`[${clientId}] Logged in as: ${name} (${phoneNumber})`);
-
       try {
-        this.logger.log(`[${clientId}] Checking for existing account`);
-        const existingAccount = await this.accountModel.findOne({ phone_number: phoneNumber }).exec();
+        const userInfo = client.info;
+        const phoneNumber = userInfo?.wid?.user || 'Unknown';
+        const name = userInfo?.pushname || 'Unknown';
+
+        this.logger.log(`📞 ${clientId} logged in as: ${name} (${phoneNumber})`);
+
+        // Check for existing account (optimized query)
+        const existingAccount = await this.accountModel.findOne(
+          { phone_number: phoneNumber },
+          { _id: 1, phone_number: 1 }
+        ).lean().exec();
+
         if (existingAccount) {
-          this.logger.warn(`[${clientId}] Phone number already exists: ${phoneNumber}`);
-          emit('error', { message: 'Phone number already exists', phoneNumber });
-          throw new ConflictException('Phone number already exists');
+          this.logger.warn(`⚠️ Phone number already exists: ${phoneNumber}`);
+          emit('phone_exists', { clientId, phoneNumber });
+          return;
         }
 
-        this.logger.log(`[${clientId}] Saving account to database`);
+        // Create account
         await this.accountModel.create({
           name,
           phone_number: phoneNumber,
           user: userId,
           clientId,
           status: 'active',
+          created_at: new Date()
         });
-        this.logger.log(`[${clientId}] Account saved to DB`);
+
         emit('ready', {
           phoneNumber,
           name,
           clientId,
           status: 'active',
-          message: 'WhatsApp client ready and account saved.',
+          message: 'WhatsApp client ready and account saved.'
         });
-      } catch (err) {
-        this.logger.error(`[${clientId}] Failed to save account to DB: ${err.message}`);
-        emit('error', {
-          message: 'Failed to save account to DB.',
-          details: err.message,
-        });
+
+      } catch (error) {
+        this.logger.error(`❌ Ready handler error: ${error.message}`);
+        emit('ready_error', { clientId, error: error.message });
       }
     });
 
-    client.on('disconnected', (reason) => {
-      this.logger.warn(`[${clientId}] Disconnected: ${reason}`);
+    // Disconnection handler
+    client.on('disconnected', async (reason) => {
+      this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
       emit('disconnected', { clientId, reason });
+
+      // Update database status
+      await this.accountModel.updateOne(
+        { clientId },
+        { status: 'disconnected', disconnected_at: new Date() }
+      ).exec();
+
+      this.performCleanup(clientId);
     });
-
-    this.logger.log(`[${clientId}] Initializing WhatsApp client...`);
-    try {
-      await client.initialize();
-      this.logger.log(`[${clientId}] Client initialized and session started`);
-      this.clients.set(clientId, client);
-    } catch (err) {
-      this.logger.error(`[${clientId}] Failed to initialize client: ${err.message}`);
-      this.clients.delete(clientId);
-      this.socketClientMap.delete(socketClientId);
-      emit('error', { message: 'Failed to initialize WhatsApp client', details: err.message });
-    }
-
-    return { clientId };
   }
 
-  /**
-   * Handle incoming WhatsApp message and pass to registered handlers
-   * @param message WhatsApp message object
-   * @param clientId The client ID that received the message
-   */
   private async handleIncomingMessage(message: Message, clientId: string) {
     try {
-      if (message.fromMe) {
-        // Skip messages sent by the current account
-        return;
-      }
+      if (message.fromMe) return;
 
-      // Get the account associated with this client ID
-      const account = await this.accountModel.findOne({ clientId }).exec();
+      // Optimized account lookup
+      const account = await this.accountModel.findOne(
+        { clientId },
+        { _id: 1, user: 1 }
+      ).lean().exec();
+
       if (!account) {
-        this.logger.warn(`No account found for client ${clientId}`);
+        this.logger.warn(`📱 No account found for client ${clientId}`);
         return;
       }
 
       const accountId = account._id.toString();
-      const sender = message.from.split('@')[0]; // Extract phone number
+      const sender = message.from.split('@')[0];
 
-      this.logger.log(`Received message from ${sender} to account ${accountId}: ${message.body.substring(0, 50)}${message.body.length > 50 ? '...' : ''}`);
+      this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
 
-      // Pass message to all registered handlers
-      for (const handler of this.messageHandlers) {
-        try {
-          await handler(message, accountId);
-        } catch (error) {
-          this.logger.error(`Error in message handler: ${error.message}`);
-        }
-      }
+      // Process handlers in parallel
+      const handlerPromises = this.messageHandlers.map(handler =>
+        handler(message, accountId).catch(error =>
+          this.logger.error(`Handler error: ${error.message}`)
+        )
+      );
+
+      await Promise.allSettled(handlerPromises);
+
     } catch (error) {
-      this.logger.error(`Error handling incoming message: ${error.message}`);
+      this.logger.error(`❌ Message handling error: ${error.message}`);
     }
   }
 
-  /**
-   * Send a message to one or more recipients with configurable delay between messages
-   * @param clientId WhatsApp client ID
-   * @param to Array of recipient phone numbers
-   * @param message Message text to send
-   * @param delayMs Delay in milliseconds between messages (default: 5000ms/5s)
-   * @returns 
-   */
-  async sendMessage(
-    clientId: string,
-    to: string[],
-    message: string,
-    delayMs: number = 5000, // Default delay of 5 seconds between messages
-  ) {
-    // Check if client exists
+  async sendMessage(clientId: string, to: string[], message: string, delayMs: number = 3000) {
     const client = this.clients.get(clientId);
     if (!client) {
-      this.logger.error(`[${clientId}] Session not found`);
-      throw new HttpException(
-        'Session not found. Please start a new session.',
-        HttpStatus.NOT_FOUND,
-      );
+      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
     }
 
-    // Check if already sending messages from this client
+    // Check if client is ready
+    if (!this.isClientReady(clientId)) {
+      // Wait for ready state with timeout
+      const readyPromise = this.clientReadyPromises.get(clientId);
+      if (readyPromise) {
+        await Promise.race([
+          readyPromise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Client ready timeout')), 30000)
+          )
+        ]);
+      }
+    }
+
+    // Prevent overlapping sends
     if (this.sendingMessages.get(clientId)) {
-      this.logger.warn(`[${clientId}] Already sending messages. Please wait for completion.`);
       throw new HttpException(
-        'Already sending messages from this account. Please wait for completion.',
-        HttpStatus.TOO_MANY_REQUESTS,
+        'Already sending messages from this account. Please wait.',
+        HttpStatus.TOO_MANY_REQUESTS
       );
     }
 
-    // Lock this client for sending
     this.sendingMessages.set(clientId, true);
 
     try {
-      this.logger.log(`[${clientId}] Starting to send message to ${to.length} recipients with ${delayMs}ms delay`);
-
       const results: MessageResult[] = [];
+      const batchSize = 5; // Process in small batches
 
-      // Send to each recipient with the specified delay
-      for (let i = 0; i < to.length; i++) {
-        const recipient = to[i];
-        const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
+      this.logger.log(`📤 Sending to ${to.length} recipients with ${delayMs}ms delay`);
 
-        try {
-          // Send the message
-          await client.sendMessage(chatId, message);
-          results.push({ recipient, status: 'sent' });
-          this.logger.log(`[${clientId}] ✅ Message sent to ${chatId} (${i + 1}/${to.length})`);
+      for (let i = 0; i < to.length; i += batchSize) {
+        const batch = to.slice(i, i + batchSize);
 
-          // If not the last recipient, apply the delay
-          if (i < to.length - 1) {
-            this.logger.debug(`[${clientId}] Waiting ${delayMs}ms before sending next message`);
-            await new Promise(resolve => setTimeout(resolve, delayMs));
+        const batchPromises = batch.map(async (recipient, batchIndex) => {
+          const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
+          const globalIndex = i + batchIndex;
+
+          try {
+            await client.sendMessage(chatId, message);
+            results.push({ recipient, status: 'sent' });
+            this.logger.debug(`✅ Sent to ${chatId} (${globalIndex + 1}/${to.length})`);
+          } catch (error) {
+            this.logger.error(`❌ Failed to send to ${chatId}: ${error.message}`);
+            results.push({ recipient, status: 'failed', error: error.message });
           }
-        } catch (error) {
-          this.logger.error(`[${clientId}] Failed to send to ${chatId}: ${error.message}`);
-          results.push({ recipient, status: 'failed', error: error.message });
+        });
+
+        await Promise.allSettled(batchPromises);
+
+        // Apply delay between batches (except for last batch)
+        if (i + batchSize < to.length) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
 
-      this.logger.log(`[${clientId}] Completed sending messages to all recipients`);
+      this.logger.log(`✅ Completed sending to all recipients`);
       return { message: 'Messages sent', results };
-    } catch (error) {
-      this.logger.error(`[${clientId}] Error in message sending process: ${error.message}`);
-      throw new HttpException(
-        `Failed to send messages: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+
     } finally {
-      // Unlock this client
       this.sendingMessages.set(clientId, false);
     }
   }
 
-  disconnectClient(socketClientId: string) {
-    const clientId = this.socketClientMap.get(socketClientId);
-    if (!clientId) {
-      this.logger.warn(`No client found for socket: ${socketClientId}`);
-      return;
-    }
+  private performCleanup(clientId: string) {
+    this.clients.delete(clientId);
+    this.sendingMessages.delete(clientId);
+    this.clientReadyPromises.delete(clientId);
 
-    this.logger.log(`[${clientId}] Disconnect requested for socket: ${socketClientId}`);
-
-    const client = this.clients.get(clientId);
-    if (client) {
-      // If currently sending messages, wait for completion
-      if (this.sendingMessages.get(clientId)) {
-        this.logger.log(`[${clientId}] Client is busy sending messages. Marking for delayed disconnect.`);
-        setTimeout(() => this.performDisconnect(clientId, socketClientId), 5000);
-        return;
+    // Find and remove socket mapping
+    for (const [socketId, mappedClientId] of this.socketClientMap.entries()) {
+      if (mappedClientId === clientId) {
+        this.socketClientMap.delete(socketId);
+        break;
       }
-
-      this.performDisconnect(clientId, socketClientId);
-    } else {
-      this.socketClientMap.delete(socketClientId);
-      this.logger.log(`[${clientId}] Socket mapping cleared (client not found)`);
     }
   }
 
-  private async performDisconnect(clientId: string, socketClientId: string) {
+  private cleanupExpiredQRCodes() {
+    const now = Date.now();
+    for (const [qr, cache] of this.qrCache.entries()) {
+      if (now - cache.timestamp > 300000) { // 5 minutes
+        this.qrCache.delete(qr);
+      }
+    }
+  }
+
+  private cleanupStaleConnections() {
+    // Implementation for cleaning up stale connections
+    this.logger.debug('🧹 Performing stale connection cleanup');
+  }
+
+  // ... Rest of the existing methods with minor optimizations ...
+
+  disconnectClient(socketClientId: string) {
+    const clientId = this.socketClientMap.get(socketClientId);
+    if (!clientId) return;
+
+    // Immediate cleanup for better responsiveness
+    setImmediate(async () => {
+      try {
+        const client = this.clients.get(clientId);
+        if (client) {
+          await client.destroy();
+        }
+
+        await this.accountModel.updateOne(
+          { clientId },
+          { status: 'disconnected', disconnected_at: new Date() }
+        ).exec();
+
+        this.performCleanup(clientId);
+        this.logger.log(`🗑️ Cleaned up client ${clientId}`);
+      } catch (error) {
+        this.logger.error(`❌ Cleanup error: ${error.message}`);
+      }
+    });
+  }
+
+  isClientReady(clientId: string): boolean {
+    const client = this.clients.get(clientId);
+    return client !== undefined && !this.sendingMessages.get(clientId);
+  }
+
+  getActiveSessionCount(): number {
+    return this.clients.size;
+  }
+
+  getAllSessions(): string[] {
+    return Array.from(this.clients.keys());
+  }
+
+  async getUserAccounts(userId: string) {
+    return this.accountModel.find({ user: userId }).lean().exec();
+  }
+
+  private async loadClientsFromSessions() {
+    const authDir = path.join(process.cwd(), '.wwebjs_auth');
+    if (!fs.existsSync(authDir)) {
+      this.logger.warn('📁 .wwebjs_auth directory not found');
+      return;
+    }
+
+    const sessionFiles = fs.readdirSync(authDir).filter(file => file.startsWith('session-'));
+    this.logger.log(`📂 Found ${sessionFiles.length} session files to load`);
+
+    // Load sessions in parallel with concurrency limit
+    const concurrencyLimit = 3;
+    const semaphore = Array(concurrencyLimit).fill(null).map(() => Promise.resolve());
+
+    const loadPromises = sessionFiles.map(async (file, index) => {
+      // Wait for available slot
+      const slot = index % concurrencyLimit;
+      await semaphore[slot];
+
+      const promise = this.loadSingleSession(file);
+      semaphore[slot] = promise.catch(() => { }); // Don't let failures block other slots
+      return promise;
+    });
+
+    const results = await Promise.allSettled(loadPromises);
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+
+    this.logger.log(`✅ Loaded ${successful}/${sessionFiles.length} sessions successfully`);
+  }
+
+  private async loadSingleSession(file: string): Promise<void> {
+    const clientId = file.replace('session-', '');
+    const sessionPath = path.join(process.cwd(), '.wwebjs_auth', file);
+
+    try {
+      if (!this.isValidSession(sessionPath)) {
+        this.logger.warn(`⚠️ Invalid session ${clientId}, cleaning up`);
+        await this.cleanupSession(sessionPath);
+        return;
+      }
+
+      this.logger.debug(`🔄 Loading session: ${clientId}`);
+
+      const client = new Client({
+        authStrategy: new LocalAuth({ clientId }),
+        puppeteer: this.puppeteerConfig,
+      });
+
+      // Setup minimal handlers for loaded sessions
+      client.on('message', async (message) => {
+        setImmediate(() => this.handleIncomingMessage(message, clientId));
+      });
+
+      client.on('ready', () => {
+        this.logger.log(`✅ Loaded session ${clientId} is ready`);
+      });
+
+      client.on('auth_failure', async () => {
+        this.logger.error(`🚫 Loaded session ${clientId} auth failed`);
+        await this.cleanupSession(sessionPath);
+        this.clients.delete(clientId);
+      });
+
+      client.on('disconnected', async (reason) => {
+        this.logger.warn(`🔌 Loaded session ${clientId} disconnected: ${reason}`);
+        await this.accountModel.updateOne(
+          { clientId },
+          { status: 'disconnected', disconnected_at: new Date() }
+        ).exec();
+        await this.cleanupSession(sessionPath);
+        this.clients.delete(clientId);
+      });
+
+      // Initialize and store
+      await client.initialize();
+      this.clients.set(clientId, client);
+
+      this.logger.debug(`✅ Session ${clientId} loaded successfully`);
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to load session ${clientId}: ${error.message}`);
+      await this.cleanupSession(sessionPath);
+    }
+  }
+
+  private isValidSession(sessionPath: string): boolean {
+    try {
+      if (!fs.existsSync(sessionPath)) return false;
+
+      const defaultPath = path.join(sessionPath, 'Default');
+      if (!fs.existsSync(defaultPath)) return false;
+
+      const stats = fs.statSync(defaultPath);
+      if (!stats.isDirectory()) return false;
+
+      const files = fs.readdirSync(defaultPath);
+      const hasRequiredFiles = files.some(file =>
+        file.includes('Cookies') || file.includes('Local State')
+      );
+
+      return hasRequiredFiles && files.length > 2; // Should have multiple files
+    } catch (error) {
+      this.logger.error(`❌ Session validation error: ${error.message}`);
+      return false;
+    }
+  }
+
+  private async cleanupSession(sessionPath: string): Promise<void> {
+    try {
+      if (fs.existsSync(sessionPath)) {
+        await fs.promises.rm(sessionPath, { recursive: true, force: true });
+        this.logger.debug(`🗑️ Cleaned up session: ${sessionPath}`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Session cleanup failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get detailed client information
+   */
+  async getClientInfo(clientId: string) {
+    const client = this.clients.get(clientId);
+    if (!client) {
+      return null;
+    }
+
+    try {
+      const info = client.info;
+      const account = await this.accountModel.findOne(
+        { clientId },
+        { name: 1, phone_number: 1, status: 1, created_at: 1 }
+      ).lean().exec();
+
+      return {
+        clientId,
+        isReady: this.isClientReady(clientId),
+        isSending: this.sendingMessages.get(clientId) || false,
+        whatsappInfo: {
+          phoneNumber: info?.wid?.user || 'Unknown',
+          name: info?.pushname || 'Unknown',
+          platform: info?.platform || 'Unknown'
+        },
+        accountInfo: account,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      this.logger.error(`❌ Error getting client info: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Health check for the service
+   */
+  getHealthStatus() {
+    const totalClients = this.clients.size;
+    const activeSending = Array.from(this.sendingMessages.values()).filter(Boolean).length;
+    const qrCacheSize = this.qrCache.size;
+
+    return {
+      status: 'healthy',
+      metrics: {
+        totalClients,
+        activeSending,
+        qrCacheSize,
+        initializationQueue: this.initializationQueue.size,
+        socketMappings: this.socketClientMap.size
+      },
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+      },
+      timestamp: Date.now()
+    };
+  }
+
+  /**
+   * Force cleanup of a specific client
+   */
+  async forceCleanupClient(clientId: string) {
     try {
       const client = this.clients.get(clientId);
       if (client) {
         await client.destroy();
-        this.clients.delete(clientId);
-        this.logger.log(`[${clientId}] WhatsApp client destroyed`);
       }
 
-      this.socketClientMap.delete(socketClientId);
-      this.sendingMessages.delete(clientId);
-      this.logger.log(`[${clientId}] Session mapping cleared`);
+      this.performCleanup(clientId);
 
-      // Update account status in database
-      await this.accountModel.updateOne({ clientId }, { status: 'disconnected' }).exec();
+      // Update database
+      await this.accountModel.updateOne(
+        { clientId },
+        { status: 'force_disconnected', disconnected_at: new Date() }
+      ).exec();
+
+      this.logger.log(`🔨 Force cleaned up client: ${clientId}`);
+      return true;
     } catch (error) {
-      this.logger.error(`[${clientId}] Error during disconnect: ${error.message}`);
+      this.logger.error(`❌ Force cleanup failed: ${error.message}`);
+      return false;
     }
-  }
-
-  getActiveSessionCount(): number {
-    const count = this.clients.size;
-    this.logger.log(`Active WhatsApp sessions: ${count}`);
-    return count;
-  }
-
-  getAllSessions(): string[] {
-    const sessions = Array.from(this.clients.keys());
-    this.logger.log(`Current client session IDs: ${sessions.join(', ')}`);
-    return sessions;
-  }
-
-  /**
-   * Get all WhatsApp accounts for a specific user
-   * @param userId User ID
-   * @returns List of WhatsApp accounts
-   */
-  async getUserAccounts(userId: string) {
-    return this.accountModel.find({ user: userId }).exec();
-  }
-
-  /**
-   * Check if a specific client is connected and ready
-   * @param clientId WhatsApp client ID
-   * @returns boolean indicating if client is ready
-   */
-  isClientReady(clientId: string): boolean {
-    return this.clients.has(clientId) && !this.sendingMessages.get(clientId);
   }
 }

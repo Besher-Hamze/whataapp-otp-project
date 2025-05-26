@@ -36,7 +36,7 @@ export class GroupsService {
         existingContact = await this.contactsService.create({
           name,
           phone_number,
-          account: createGroupDto.account,
+          account: accountId,
         }, userId);
       }
 
@@ -57,7 +57,7 @@ export class GroupsService {
     const groupDoc = new this.groupModel({
       name: createGroupDto.name,
       contacts: contactIds,
-      account: createGroupDto.account,
+      account: accountId,
       user: userId,
       created_at: new Date(),
       updated_at: new Date(),

@@ -17,7 +17,7 @@ export class GroupsController {
   constructor(private readonly groupsService: GroupsService) { }
 
   @Post()
-  create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string
+  create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string,
     @GetWhatsappAccountId() accountId: string
 ) {
     return this.groupsService.create(createGroupDto, userId, accountId);

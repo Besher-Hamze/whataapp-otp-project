@@ -22,5 +22,5 @@ export class CreateGroupDto {
 
   @IsMongoId()
   @IsNotEmpty()
-  account: string;
+  account?: string;
 }

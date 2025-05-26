@@ -3,26 +3,22 @@ import { Document } from 'mongoose';
 
 export type MessageDocument = Message & Document;
 
-@Schema()
+@Schema({timestamps : true})
 export class Message {
+  @Prop({ required: true })
+  chatId: string;
+  
   @Prop({ required: true })
   message: string;
 
-  @Prop({ type: [String], required: true })
-  number_list?: string[];
-
   @Prop({ required: true })
-  schedule_time: Date;
+  send_date?: Date;
 
   @Prop({ type: 'ObjectId', ref: 'Account', required: true })
-  account: string;
+  client: string;
 
-  @Prop({ type: 'ObjectId', ref: 'Contact', required: true })
-  contact?: string;
-
-  @Prop({ type: 'ObjectId', ref: 'Group', required: true })
-  group?: string;
-
+  @Prop({ required: true, enum: ['pending', 'sent', 'failed'], default: 'pending' })
+  status: string;
 }
 
 export const MessageSchema = SchemaFactory.createForClass(Message);

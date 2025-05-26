@@ -25,9 +25,6 @@ export class Schedule extends Document {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: true })
   whatsappAccount: Account;
   
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  user: User;
-
   @Prop({ default: 0 })
   retryCount: number;
 

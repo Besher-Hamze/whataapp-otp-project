@@ -10,15 +10,17 @@ import {
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
-import { GetUserId } from 'src/common/decorators';
+import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
 
 @Controller('groups')
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) { }
 
   @Post()
-  create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string) {
-    return this.groupsService.create(createGroupDto, userId);
+  create(@Body() createGroupDto: CreateGroupDto, @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
+) {
+    return this.groupsService.create(createGroupDto, userId, accountId);
   }
 
   @Get()

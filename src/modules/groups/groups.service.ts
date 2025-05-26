@@ -18,7 +18,7 @@ export class GroupsService {
     private readonly contactsService: ContactsService,
   ) { }
 
-  async create(createGroupDto: CreateGroupDto, userId: string) {
+  async create(createGroupDto: CreateGroupDto, userId: string, accountId: string) {
     const contactIds: Types.ObjectId[] = [];
     if (!userId) {
       this.logger.error('User ID is required to create a group');

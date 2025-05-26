@@ -21,10 +21,10 @@ export class SchedulingService {
     private schedulerRegistry: SchedulerRegistry,
   ) {}
 
-  async create(createScheduleDto: CreateScheduleDto, userId: string) {
+  async create(createScheduleDto: CreateScheduleDto, userId: string, accountId: string) {
     try {
       // Verify the whatsapp account exists and belongs to this user
-      const account = await this.accountsService.findOne(createScheduleDto.whatsappAccountId, userId);
+      const account = await this.accountsService.findOne(accountId, userId);
       if (!account) {
         throw new NotFoundException('WhatsApp account not found or does not belong to this user');
       }
@@ -40,8 +40,7 @@ export class SchedulingService {
         message: createScheduleDto.message,
         recipients: createScheduleDto.recipients,
         scheduledTime: scheduledTime,
-        whatsappAccount: createScheduleDto.whatsappAccountId,
-        user: userId,
+        whatsappAccount: accountId,
         status: ScheduleStatus.PENDING,
         messageDelayMs: createScheduleDto.messageDelayMs || 5000, // Default to 5 seconds if not provided
       });
@@ -98,15 +97,15 @@ export class SchedulingService {
     }
   }
 
-  async findAll(userId: string) {
-    return this.scheduleModel.find({ user: userId })
+  async findAll(accountId: string) {
+    return this.scheduleModel.find({ whatsappAccount: accountId })
       .sort({ scheduledTime: -1 })
       .populate('whatsappAccount', 'name phone_number')
       .exec();
   }
 
-  async findOne(id: string, userId: string) {
-    const schedule = await this.scheduleModel.findOne({ _id: id, user: userId })
+  async findOne(id: string, accountId: string) {
+    const schedule = await this.scheduleModel.findOne({ _id: id, whatsappAccount: accountId })
       .populate('whatsappAccount', 'name phone_number')
       .exec();
     
@@ -117,8 +116,8 @@ export class SchedulingService {
     return schedule;
   }
 
-  async update(id: string, updateScheduleDto: UpdateScheduleDto, userId: string) {
-    const schedule = await this.findOne(id, userId);
+  async update(id: string, updateScheduleDto: UpdateScheduleDto, accountId: string) {
+    const schedule = await this.findOne(id, accountId);
     
     // Don't allow updating completed or processing schedules
     if ([ScheduleStatus.COMPLETED, ScheduleStatus.PROCESSING].includes(schedule.status as ScheduleStatus)) {
@@ -147,7 +146,6 @@ export class SchedulingService {
       id,
       { 
         ...updateScheduleDto,
-        ...(updateScheduleDto.whatsappAccountId && { whatsappAccount: updateScheduleDto.whatsappAccountId })
       },
       { new: true }
     ).exec();

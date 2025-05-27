@@ -49,10 +49,6 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true, // Remove unknown properties
     transform: true, // Transform payloads to DTO instances
-    forbidNonWhitelisted: true, // Throw errors if unknown properties are present
-    transformOptions: {
-      enableImplicitConversion: true, // Automatically convert primitive types
-    },
   }));
 
   // Global filters

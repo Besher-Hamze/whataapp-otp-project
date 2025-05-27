@@ -17,14 +17,14 @@ export class TemplatesService {
   /**
    * Create a new message template
    * @param createTemplateDto Template data
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Created template
    */
-  async create(createTemplateDto: CreateTemplateDto, userId: string): Promise<TemplateDocument> {
-    // Check if template with same name already exists for this user
+  async create(createTemplateDto: CreateTemplateDto, accountId: string): Promise<TemplateDocument> {
+    // Check if template with same name already exists for this account
     const existingTemplate = await this.templateModel.findOne({
       name: createTemplateDto.name,
-      user: userId,
+      account: accountId,
     });
 
     if (existingTemplate) {
@@ -37,17 +37,17 @@ export class TemplatesService {
     // Create the template
     const newTemplate = await this.templateModel.create({
       ...createTemplateDto,
-      user: userId,
+      account: accountId,
       variables: Object.fromEntries(variables.map(v => [v, ''])),
     });
 
-    this.logger.log(`Created new template: ${newTemplate.name} for user ${userId}`);
+    this.logger.log(`Created new template: ${newTemplate.name} for account ${accountId}`);
     return newTemplate;
   }
 
   /**
-   * Get all templates for a user with optional filtering
-   * @param userId User ID
+   * Get all templates for a account with optional filtering
+   * @param accountId Account ID
    * @param type Optional template type filter
    * @param search Optional search term 
    * @param skip Number of records to skip (pagination)
@@ -55,14 +55,14 @@ export class TemplatesService {
    * @returns Paginated templates list
    */
   async findAll(
-    userId: string,
+    accountId: string,
     type?: TemplateType,
     search?: string,
     skip: number = 0,
     limit: number = 50
   ): Promise<{ templates: TemplateDocument[], total: number }> {
     // Build query
-    const query: any = { user: userId };
+    const query: any = { account: accountId };
     
     if (type) {
       query.type = type;
@@ -96,17 +96,17 @@ export class TemplatesService {
   /**
    * Find template by ID
    * @param id Template ID
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Template or throws if not found
    */
-  async findById(id: string, userId: string): Promise<TemplateDocument> {
+  async findById(id: string, accountId: string): Promise<TemplateDocument> {
     const template = await this.templateModel.findOne({
       _id: id,
-      user: userId,
+      account: accountId,
     }).exec();
     
     if (!template) {
-      throw new NotFoundException(`Template with ID "${id}" not found or does not belong to user`);
+      throw new NotFoundException(`Template with ID "${id}" not found or does not belong to account`);
     }
     
     return template;
@@ -116,22 +116,22 @@ export class TemplatesService {
    * Update a template
    * @param id Template ID
    * @param updateTemplateDto Updated template data
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Updated template
    */
-  async update(id: string, updateTemplateDto: UpdateTemplateDto, userId: string): Promise<TemplateDocument> {
-    // Check if template exists and belongs to user
-    const template = await this.findById(id, userId);
+  async update(id: string, updateTemplateDto: UpdateTemplateDto, accountId: string): Promise<TemplateDocument> {
+    // Check if template exists and belongs to account
+    const template = await this.findById(id, accountId);
     
     if (!template) {
-      throw new NotFoundException(`Template with ID "${id}" not found or does not belong to user`);
+      throw new NotFoundException(`Template with ID "${id}" not found or does not belong to account`);
     }
     
     // If updating name, check for duplicates
     if (updateTemplateDto.name && updateTemplateDto.name !== template.name) {
       const existingTemplate = await this.templateModel.findOne({
         name: updateTemplateDto.name,
-        user: userId,
+        account: accountId,
         _id: { $ne: id },
       });
       
@@ -167,36 +167,36 @@ export class TemplatesService {
       throw new NotFoundException(`Template with ID "${id}" not found after update attempt`);
     }
     
-    this.logger.log(`Updated template ${id} for user ${userId}`);
+    this.logger.log(`Updated template ${id} for account ${accountId}`);
     return updatedTemplate;
   }
 
   /**
    * Delete a template
    * @param id Template ID
-   * @param userId User ID
+   * @param accountId Account ID
    */
-  async delete(id: string, userId: string): Promise<void> {
-    // Check if template exists and belongs to user
-    await this.findById(id, userId);
+  async delete(id: string, accountId: string): Promise<void> {
+    // Check if template exists and belongs to account
+    await this.findById(id, accountId);
     
     await this.templateModel.deleteOne({
       _id: id,
-      user: userId,
+      account: accountId,
     }).exec();
     
-    this.logger.log(`Deleted template ${id} for user ${userId}`);
+    this.logger.log(`Deleted template ${id} for account ${accountId}`);
   }
 
   /**
    * Render a template by replacing variables with values
    * @param renderDto Template and variables data
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Rendered template text
    */
-  async renderTemplate(renderDto: RenderTemplateDto, userId: string): Promise<string> {
+  async renderTemplate(renderDto: RenderTemplateDto, accountId: string): Promise<string> {
     // Get the template
-    const template = await this.findById(renderDto.templateId, userId);
+    const template = await this.findById(renderDto.templateId, accountId);
     
     // Get the content and variables to replace
     const content = template.content;
@@ -225,10 +225,10 @@ export class TemplatesService {
   }
 
   /**
-   * Create default templates for a new user
-   * @param userId User ID
+   * Create default templates for a new account
+   * @param accountId Account ID
    */
-  async createDefaultTemplates(userId: string): Promise<void> {
+  async createDefaultTemplates(accountId: string): Promise<void> {
     const defaultTemplates = [
       {
         name: 'Welcome Message',
@@ -265,41 +265,41 @@ export class TemplatesService {
         // Check if template already exists
         const exists = await this.templateModel.findOne({
           name: template.name,
-          user: userId,
+          account: accountId,
         });
         
         if (!exists) {
-          await this.create(template as CreateTemplateDto, userId);
+          await this.create(template as CreateTemplateDto, accountId);
         }
       } catch (error) {
         this.logger.error(`Failed to create default template "${template.name}": ${error.message}`);
       }
     }
     
-    this.logger.log(`Created default templates for user ${userId}`);
+    this.logger.log(`Created default templates for account ${accountId}`);
   }
   
   /**
    * Find templates by tags
    * @param tags Tags to search for
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Templates matching the tags
    */
-  async findByTags(tags: string[], userId: string): Promise<TemplateDocument[]> {
+  async findByTags(tags: string[], accountId: string): Promise<TemplateDocument[]> {
     return this.templateModel.find({
       tags: { $in: tags },
-      user: userId,
+      account: accountId,
     }).exec();
   }
   
   /**
    * Get template usage statistics
-   * @param userId User ID
+   * @param accountId Account ID
    * @returns Template usage stats
    */
-  async getUsageStats(userId: string): Promise<any> {
+  async getUsageStats(accountId: string): Promise<any> {
     const stats = await this.templateModel.aggregate([
-      { $match: { user: userId } },
+      { $match: { account: accountId } },
       { $sort: { usageCount: -1 } },
       {
         $group: {

@@ -11,7 +11,7 @@ export class Group extends Document {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Contact' }] })
   contacts: Types.ObjectId[];
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // or Account
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Account' }) // or Account
   account: Types.ObjectId;
 
   @Prop()
@@ -20,5 +20,5 @@ export class Group extends Document {
   @Prop()
   updated_at: Date;
 }
-
+export type GroupDocument = Group & Document;
 export const GroupSchema = SchemaFactory.createForClass(Group);

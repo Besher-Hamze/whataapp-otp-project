@@ -1,12 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
-import { Group } from './schema/groups.schema';
+import { Group, GroupDocument } from './schema/groups.schema';
 import { Model, Types, HydratedDocument } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { PhoneService } from '../phone/phone.service';
 import { ContactsService } from '../contacts/contacts.service';
-import { Contact } from '../contacts/schema/contacts.schema';
+import { Contact, ContactDocument } from '../contacts/schema/contacts.schema';
 
 @Injectable()
 export class GroupsService {
@@ -18,131 +18,194 @@ export class GroupsService {
     private readonly contactsService: ContactsService,
   ) { }
 
-  async create(createGroupDto: CreateGroupDto, userId: string) {
-    const contactIds: Types.ObjectId[] = [];
-    if (!userId) {
-      this.logger.error('User ID is required to create a group');
-      throw new Error('User ID is required');
-    }
-
-    for (const contact of createGroupDto.phone_numbers) {
-      const { phone_number, name } = contact;
-
-      let existingContact =
-        await this.contactsService.findByPhoneNumber(phone_number, userId);
-
-      // create if not exist
-      if (!existingContact) {
-        existingContact = await this.contactsService.create({
-          name,
-          phone_number,
-          account: createGroupDto.account,
-        }, userId);
-      }
-
-      // Make sure contact exists before adding to group
-      if (existingContact && existingContact._id) {
-        contactIds.push(existingContact._id);
-      }
-
-      const existsInPhone = await this.phoneService.findByNumber(phone_number);
-      if (!existsInPhone) {
-        await this.phoneService.create({
-          number: phone_number,
-          user: userId
-        });
-      }
-    }
-
-    const groupDoc = new this.groupModel({
-      name: createGroupDto.name,
-      contacts: contactIds,
-      account: createGroupDto.account,
-      user: userId,
-      created_at: new Date(),
-      updated_at: new Date(),
+  async create(createDto: CreateGroupDto, accountId: string) {
+    const existingGroup = await this.groupModel.findOne({ 
+      name: createDto.name, 
+      account: new Types.ObjectId(accountId) 
     });
 
-    const newGroup: HydratedDocument<Group> = await groupDoc.save();
+    if (existingGroup) {
+      const contactIdsToAdd: Types.ObjectId[] = [];
 
-    if (newGroup._id && contactIds.length > 0) {
-      // Add group to contacts
-      const groupId = new Types.ObjectId(newGroup._id);
-      await this.contactsService.addGroupToContacts(
-        contactIds,
-        groupId,
-        userId
-      );
-    }
+      for (const member of createDto.phone_numbers) {
+        let contact = await this.contactsService.findByPhoneNumber(member.phone_number, accountId);
+        if (!contact) {
+          contact = await this.contactsService.create({ name: member.name, phone_number: member.phone_number }, accountId);
+        }
 
-    return newGroup;
-  }
+        const exists = await this.phoneService.findByNumber(member.phone_number);
+        if (!exists) {
+          await this.phoneService.create({ number: member.phone_number, account: accountId });
+        }
 
-  async findAllGroups(userId: string): Promise<Group[]> {
-    return this.groupModel.find({ user: userId }).populate('contacts').exec();
-  }
-
-  async findGroupById(id: string, userId: string): Promise<Group | null> {
-    try {
-      const group = await this.groupModel
-        .findOne({ _id: id, user: userId })
-        .populate('contacts')
-        .exec();
-
-      if (!group) {
-        throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
+        if (!existingGroup.contacts.some(cId => cId.equals(contact._id))) {
+          contactIdsToAdd.push(contact._id);
+        }
       }
 
-      return group;
-    } catch (error) {
-      if (error.name === 'CastError') {
-        throw new NotFoundException(`Invalid Group ID "${id}"`);
+      if (contactIdsToAdd.length) {
+        existingGroup.contacts.push(...contactIdsToAdd);
+        try {
+          await existingGroup.save();
+          this.logger.log('Group saved with new contacts:', existingGroup.contacts);
+        } catch (err) {
+          this.logger.error('Failed to save group:', err);
+        }
+
+        await this.contactsService.addGroupToContacts(contactIdsToAdd, existingGroup._id, accountId);
       }
-      throw error;
-    }
-  }
 
-  async updateGroup(
-    id: string,
-    updateGroupDto: UpdateGroupDto,
-    userId: string,
-  ): Promise<Group | null> {
-    const existingGroup = await this.groupModel.findOne({ _id: id, user: userId });
-    if (!existingGroup) {
-      throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
+      this.logger.log(`Updated existing group ${existingGroup._id} with new contacts`);
+
+      return existingGroup;
     }
 
-    return this.groupModel.findByIdAndUpdate(
-      id,
-      {
-        ...updateGroupDto,
-        updated_at: new Date(),
-      },
-      { new: true },
-    );
-  }
+    // Group does not exist, create it with contacts
+    const contactIds: Types.ObjectId[] = [];
 
-  async findByAccountId(accountId: string, userId: string): Promise<any[]> {
-    const groups = await this.groupModel
-      .find({ account: accountId, user: userId })
+    for (const member of createDto.phone_numbers) {
+      const { phone_number, name } = member;
+      let contact = await this.contactsService.findByPhoneNumber(phone_number, accountId);
+      if (!contact) {
+        contact = await this.contactsService.create({ name, phone_number }, accountId);
+      }
+      contactIds.push(contact._id);
+
+      const exists = await this.phoneService.findByNumber(phone_number);
+      if (!exists) {
+        await this.phoneService.create({ number: phone_number, account: accountId });
+      }
+    }
+
+    const group = await this.groupModel.create({
+      name: createDto.name,
+      contacts: contactIds,
+      account: new Types.ObjectId(accountId),
+    });
+
+    if (contactIds.length) {
+      await this.contactsService.addGroupToContacts(contactIds, group._id, accountId);
+    }
+
+    this.logger.log(`Created group ${group._id} under account ${accountId}`);
+    return group;
+  }
+  
+async findAllGroups(accountId: string): Promise<Group[]> {
+  return this.groupModel
+    .find({ account: new Types.ObjectId(accountId) })
+    .populate('contacts')
+    .exec();
+}
+
+  async findGroupById(id: string, accountId: string): Promise<GroupDocument> {
+  try {
+
+    const objectAccountId = new Types.ObjectId(accountId);
+    const group = await this.groupModel
+      .findOne({ _id: id, account: objectAccountId })
       .populate('contacts')
       .exec();
 
-    // Optional: Transform contacts
-    return groups.map((group) => ({
-      _id: group._id,
-      name: group.name,
-      contacts: group.contacts.map((contact: any) => ({
-        name: contact.name,
-        phonenum: contact.phone_number,
-      })),
-    }));
+    if (!group) {
+      throw new NotFoundException(`Group with ID "${id}" not found or does not belong to account`);
+    }
+
+    return group;
+  } catch (error: any) {
+    if (error.name === 'CastError') {
+      throw new NotFoundException(`Invalid Group ID "${id}"`);
+    }
+    throw error;
+  }
+}
+
+async updateGroup(
+  id: string,
+  updateGroupDto: UpdateGroupDto,
+  accountId: string,
+): Promise<Group | null> {
+  const objectId = new Types.ObjectId(id);
+  const accountObjectId = new Types.ObjectId(accountId);
+
+  const existingGroup = await this.groupModel.findOne({ _id: objectId, account: accountObjectId });
+  if (!existingGroup) {
+    throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
   }
 
-  async deleteGroup(id: string, userId: string): Promise<void> {
-    const result = await this.groupModel.deleteOne({ _id: id, user: userId });
-    if (result.deletedCount === 0) {
-      throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
+  if (updateGroupDto.phone_numbers && updateGroupDto.phone_numbers.length > 0) {
+    const contactIdsToAdd: Types.ObjectId[] = [];
+
+    for (const member of updateGroupDto.phone_numbers) {
+      let contact: ContactDocument | null = await this.contactsService.findByPhoneNumber(member.phone_number, accountId);
+
+      // If contact not found by new phone number, check if it exists in the group by ID
+      if (!contact && existingGroup.contacts.length > 0) {
+        const existingContactId = existingGroup.contacts.find(async (cId) =>
+          (await this.contactsService.findContactById(cId.toString(), accountId))?.phone_number === member.phone_number
+        );
+        if (existingContactId) {
+          contact = await this.contactsService.findContactById(existingContactId.toString(), accountId);
+        }
+      }
+
+      if (!contact) {
+        // Create new contact if it doesn't exist
+        contact = await this.contactsService.create(
+          { name: member.name, phone_number: member.phone_number },
+          accountId
+        );
+      } else {
+        // Check if update is needed (name or phone_number changed)
+        const needsUpdate = contact.name !== member.name || contact.phone_number !== member.phone_number;
+        if (needsUpdate) {
+          contact = await this.contactsService.updateContact(
+            contact._id.toString(),
+            { name: member.name, phone_number: member.phone_number },
+            accountId
+          );
+        }
+      }
+
+      if (contact && !existingGroup.contacts.some(cId => cId.equals(contact._id))) {
+        contactIdsToAdd.push(contact._id);
+      }
+    }
+
+    if (contactIdsToAdd.length > 0) {
+      existingGroup.contacts.push(...contactIdsToAdd);
+      await this.contactsService.addGroupToContacts(contactIdsToAdd, existingGroup._id, accountId);
     }
   }
+
+  if (updateGroupDto.name) {
+    existingGroup.name = updateGroupDto.name;
+  }
+
+  existingGroup.updated_at = new Date();
+
+  try {
+    await existingGroup.save();
+    this.logger.log('Group saved with new contacts:', existingGroup.contacts);
+  } catch (err) {
+    this.logger.error('Failed to save group:', err);
+    throw err;
+  }
+
+  return existingGroup;
+}
+
+  async deleteGroup(id: string, accountId: string): Promise<{ message: string }> {
+  const objectId = new Types.ObjectId(id);
+  const accountObjectId = new Types.ObjectId(accountId);
+
+  const result = await this.groupModel.deleteOne({ _id: objectId, account: accountObjectId });
+
+  if (result.deletedCount === 0) {
+    throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
+  }
+
+  return { message: `Group with ID "${id}" has been successfully deleted.` };
+}
+
 }

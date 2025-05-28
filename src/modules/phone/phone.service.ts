@@ -9,7 +9,7 @@ export class PhoneService {
     @InjectModel(Phone.name) private phoneModel: Model<PhoneDocument>,
   ) {}
 
-  async create(data: { number: string, user?: string }) {
+  async create(data: { number: string, account?: string }) {
     const phone = new this.phoneModel(data);
     return phone.save();
   }

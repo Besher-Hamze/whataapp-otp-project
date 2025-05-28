@@ -18,11 +18,9 @@ export class Contact {
   @Prop({ type: [String], default: [] })
   tags: string[];
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: true })
   account: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  user: User;
 
   @Prop({ type: Object, default: {} })
   metadata: Record<string, any>;
@@ -40,8 +38,7 @@ export class Contact {
 export type ContactDocument = Contact & Document;
 export const ContactSchema = SchemaFactory.createForClass(Contact);
 
-// Compound index for phone_number and user to ensure uniqueness per user
-ContactSchema.index({ phone_number: 1, user: 1 }, { unique: true });
-
-// Index for improved search performance 
+// Unique index per account, remove user
+ContactSchema.index({ phone_number: 1, account: 1 }, { unique: true });
+// Text index for search
 ContactSchema.index({ name: 'text', phone_number: 'text', tags: 'text' });

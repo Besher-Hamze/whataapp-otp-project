@@ -23,14 +23,14 @@ export class ContactsService {
   /**
    * Create a new contact
    * @param createContactDto Contact data
-   * @param userId User ID who owns the contact
+   * @param accountId account ID who owns the contact
    * @returns Created contact
    */
-  async create(createContactDto: CreateContactDto, userId: string) {
-    // Check if contact with same phone number already exists for this user
+  async create(createContactDto: CreateContactDto, accountId: string) {
+    // Check if contact with same phone number already exists for this account
     const existingContact = await this.contactModel.findOne({
       phone_number: createContactDto.phone_number,
-      user: userId,
+      account: accountId,
     });
 
     if (existingContact) {
@@ -41,11 +41,11 @@ export class ContactsService {
       // Format the phone number to ensure consistency
       const formattedPhoneNumber = this.formatPhoneNumber(createContactDto.phone_number);
 
-      // Create the contact with user association
+      // Create the contact with account association
       const newContact = await this.contactModel.create({
         ...createContactDto,
         phone_number: formattedPhoneNumber,
-        user: userId,
+         account: accountId,
         created_at: new Date(),
         updated_at: new Date(),
       });
@@ -55,11 +55,11 @@ export class ContactsService {
       if (!existsInPhone) {
         await this.phoneService.create({
           number: formattedPhoneNumber,
-          user: userId
+          account: accountId
         });
       }
 
-      this.logger.log(`Created new contact: ${newContact.name} (${formattedPhoneNumber}) for user ${userId}`);
+      this.logger.log(`Created new contact: ${newContact.name} (${formattedPhoneNumber}) for account ${accountId}`);
       return newContact;
     } catch (error) {
       this.logger.error(`Failed to create contact: ${error.message}`, error.stack);
@@ -87,33 +87,33 @@ export class ContactsService {
   /**
    * Find contact by phone number
    * @param phoneNumber Phone number to search for
-   * @param userId User ID who owns the contact
+   * @param accountId account ID who owns the contact
    * @returns Contact if found, null otherwise
    */
-  async findByPhoneNumber(phoneNumber: string, userId: string): Promise<ContactDocument | null> {
+  async findByPhoneNumber(phoneNumber: string, accountId: string): Promise<ContactDocument | null> {
     const formatted = this.formatPhoneNumber(phoneNumber);
     return this.contactModel.findOne({
       phone_number: formatted,
-      user: userId
+      account: accountId
     }).exec();
   }
 
   /**
-   * Get all contacts for a specific user
-   * @param userId User ID who owns the contacts
+   * Get all contacts for a specific account
+   * @param accountId account ID who owns the contacts
    * @param search Optional search term for filtering
    * @param skip Number of records to skip for pagination
    * @param limit Maximum number of records to return
    * @returns Array of contacts
    */
   async findAllContacts(
-    userId: string,
+    accountId: string,
     search?: string,
     skip: number = 0,
     limit: number = 50
   ): Promise<{ contacts: ContactDocument[], total: number }> {
-    // Build query based on user ID and optional search term
-    const query: any = { user: userId };
+    // Build query based on account ID and optional search term
+    const query: any = { account: accountId };
 
     if (search) {
       // Search in name or phone number fields
@@ -145,20 +145,20 @@ export class ContactsService {
   /**
    * Find contact by ID
    * @param id Contact ID
-   * @param userId User ID who owns the contact
+   * @param accountId account ID who owns the contact
    * @returns Contact if found
    */
-  async findContactById(id: string, userId: string): Promise<ContactDocument> {
+  async findContactById(id: string, accountId: string): Promise<ContactDocument> {
     try {
       const contact = await this.contactModel.findOne({
         _id: id,
-        user: userId
+        account: accountId
       })
         .populate('groups', 'name')
         .exec();
 
       if (!contact) {
-        throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to user`);
+        throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to account`);
       }
 
       return contact;
@@ -174,21 +174,22 @@ export class ContactsService {
    * Add a group to multiple contacts
    * @param contactIds Array of contact IDs
    * @param groupId Group ID to add
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    */
   async addGroupToContacts(
     contactIds: Types.ObjectId[],
     groupId: Types.ObjectId,
-    userId: string
+    accountId: string
   ) {
-    // Only update contacts belonging to this user
+    // Only update contacts belonging to this account
     const result = await this.contactModel.updateMany(
-      {
-        _id: { $in: contactIds },
-        user: userId
-      },
-      { $addToSet: { groups: groupId } },
-    );
+    {
+      _id: { $in: contactIds },
+      account: new Types.ObjectId(accountId),  // Make sure this is ObjectId, not string
+    },
+    { $addToSet: { groups: groupId } },
+  );
+    this.logger.log(`Contact IDs to update: ${contactIds.map(id => id.toString())}`);
 
     this.logger.log(`Added group ${groupId} to ${result.modifiedCount} contacts`);
     return { modifiedCount: result.modifiedCount };
@@ -198,17 +199,17 @@ export class ContactsService {
    * Remove a group from multiple contacts
    * @param contactIds Array of contact IDs 
    * @param groupId Group ID to remove
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    */
   async removeGroupFromContacts(
     contactIds: Types.ObjectId[],
     groupId: Types.ObjectId,
-    userId: string
+    accountId: string
   ) {
     const result = await this.contactModel.updateMany(
       {
         _id: { $in: contactIds },
-        user: userId
+        account: accountId
       },
       { $pull: { groups: groupId } },
     );
@@ -221,22 +222,22 @@ export class ContactsService {
    * Update a contact
    * @param id Contact ID
    * @param updateContactDto Update data
-   * @param userId User ID who owns the contact
+   * @param accountId account ID who owns the contact
    * @returns Updated contact
    */
   async updateContact(
     id: string,
     updateContactDto: UpdateContactDto,
-    userId: string
+    accountId: string
   ): Promise<any> {
-    // Check if contact exists and belongs to this user
+    // Check if contact exists and belongs to this account
     const existingContact = await this.contactModel.findOne({
       _id: id,
-      user: userId
+      account: accountId
     }).exec();
 
     if (!existingContact) {
-      throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to user`);
+      throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to account`);
     }
 
     // If updating phone number, check for duplicates
@@ -245,7 +246,7 @@ export class ContactsService {
 
       const duplicateContact = await this.contactModel.findOne({
         phone_number: formattedPhoneNumber,
-        user: userId,
+        account: accountId,
         _id: { $ne: id },
       });
 
@@ -266,41 +267,20 @@ export class ContactsService {
       { new: true },
     ).populate('groups', 'name');
 
-    this.logger.log(`Updated contact ${id} for user ${userId}`);
+    this.logger.log(`Updated contact ${id} for account ${accountId}`);
     return updatedContact;
-  }
-
-  /**
-   * Find contacts by account ID
-   * @param accountId Account ID
-   * @param userId User ID who owns the account
-   * @returns Simplified contact list
-   */
-  async findByAccountId(accountId: string, userId: string): Promise<any[]> {
-    const contacts = await this.contactModel
-      .find({
-        account: accountId,
-        user: userId
-      })
-      .exec();
-
-    return contacts.map((c) => ({
-      id: c._id,
-      name: c.name,
-      phoneNumber: c.phone_number,
-    }));
   }
 
   /**
    * Find contacts by group ID
    * @param groupId Group ID
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    * @returns Contacts in the group
    */
-  async findByGroupId(groupId: string, userId: string): Promise<ContactDocument[]> {
+  async findByGroupId(groupId: string, accountId: string): Promise<ContactDocument[]> {
     return this.contactModel.find({
       groups: groupId,
-      user: userId
+      account: accountId
     }).exec();
   }
 
@@ -308,17 +288,17 @@ export class ContactsService {
    * Add tags to contacts
    * @param contactIds Array of contact IDs
    * @param tags Array of tags to add
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    */
   async addTagsToContacts(
     contactIds: string[],
     tags: string[],
-    userId: string
+    accountId: string
   ) {
     const result = await this.contactModel.updateMany(
       {
         _id: { $in: contactIds.map(id => new Types.ObjectId(id)) },
-        user: userId
+        account: accountId
       },
       { $addToSet: { tags: { $each: tags } } },
     );
@@ -331,17 +311,17 @@ export class ContactsService {
    * Remove tags from contacts
    * @param contactIds Array of contact IDs
    * @param tags Array of tags to remove
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    */
   async removeTagsFromContacts(
     contactIds: string[],
     tags: string[],
-    userId: string
+    accountId: string
   ) {
     const result = await this.contactModel.updateMany(
       {
         _id: { $in: contactIds.map(id => new Types.ObjectId(id)) },
-        user: userId
+        account: accountId
       },
       { $pull: { tags: { $in: tags } } },
     );
@@ -353,41 +333,41 @@ export class ContactsService {
   /**
    * Find contacts by tags
    * @param tags Array of tags to search for
-   * @param userId User ID who owns the contacts
+   * @param accountId account ID who owns the contacts
    * @returns Contacts with matching tags
    */
-  async findByTags(tags: string[], userId: string): Promise<ContactDocument[]> {
+  async findByTags(tags: string[], accountId: string): Promise<ContactDocument[]> {
     return this.contactModel.find({
       tags: { $all: tags },
-      user: userId
+      account: accountId
     }).exec();
   }
 
   /**
    * Delete a contact
    * @param id Contact ID
-   * @param userId User ID who owns the contact
+   * @param accountId account ID who owns the contact
    */
-  async deleteContact(id: string, userId: string): Promise<void> {
+  async deleteContact(id: string, accountId: string): Promise<void> {
     const result = await this.contactModel.deleteOne({
       _id: id,
-      user: userId
+      account: accountId
     });
 
     if (result.deletedCount === 0) {
-      throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to user`);
+      throw new NotFoundException(`Contact with ID "${id}" not found or does not belong to account`);
     }
 
-    this.logger.log(`Deleted contact ${id} for user ${userId}`);
+    this.logger.log(`Deleted contact ${id} for account ${accountId}`);
   }
 
   /**
    * Bulk import contacts
    * @param contacts Array of contacts to import
-   * @param userId User ID who will own the contacts
+   * @param accountId account ID who will own the contacts
    * @returns Import results
    */
-  async bulkImport(contacts: CreateContactDto[], userId: string): Promise<{
+  async bulkImport(contacts: CreateContactDto[], accountId: string): Promise<{
     imported: number;
     duplicates: number;
     errors: { index: number; error: string }[];
@@ -396,7 +376,7 @@ export class ContactsService {
     let duplicates = 0;
     const errors: { index: number; error: string }[] = [];
 
-    this.logger.log(`Starting bulk import of ${contacts.length} contacts for user ${userId}`);
+    this.logger.log(`Starting bulk import of ${contacts.length} contacts for account ${accountId}`);
 
     // Process contacts in batch
     for (let i = 0; i < contacts.length; i++) {
@@ -409,7 +389,7 @@ export class ContactsService {
         // Check for duplicate
         const existingContact = await this.contactModel.findOne({
           phone_number: formattedPhoneNumber,
-          user: userId,
+          account: accountId,
         });
 
         if (existingContact) {
@@ -421,7 +401,7 @@ export class ContactsService {
         await this.contactModel.create({
           ...contact,
           phone_number: formattedPhoneNumber,
-          user: userId,
+          account: accountId,
           created_at: new Date(),
           updated_at: new Date(),
         });

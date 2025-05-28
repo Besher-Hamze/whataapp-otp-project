@@ -3,7 +3,7 @@ import { SchedulingService } from './scheduling.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
-import { GetUserId } from 'src/common/decorators';
+import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
 
 @UseGuards(JwtGuard)
 @Controller('schedules')
@@ -13,14 +13,15 @@ export class SchedulingController {
   @Post()
   create(
     @Body() createScheduleDto: CreateScheduleDto,
-    @GetUserId() userId: string
+    @GetUserId() userId: string,
+    @GetWhatsappAccountId() accountId: string 
   ) {
-    return this.schedulingService.create(createScheduleDto, userId);
+    return this.schedulingService.create(createScheduleDto, userId , accountId);
   }
 
   @Get()
-  findAll(@GetUserId() userId: string) {
-    return this.schedulingService.findAll(userId);
+  findAll(@GetWhatsappAccountId() accountId: string) {
+    return this.schedulingService.findAll(accountId);
   }
 
   @Get(':id')
@@ -35,10 +36,11 @@ export class SchedulingController {
   update(
     @Param('id') id: string,
     @Body() updateScheduleDto: UpdateScheduleDto,
-    @GetUserId() userId: string
+    @GetUserId() userId: string,
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.schedulingService.update(id, updateScheduleDto, userId);
-  }
+      return this.schedulingService.update(id, updateScheduleDto, accountId);
+    }
 
   @Delete(':id')
   remove(

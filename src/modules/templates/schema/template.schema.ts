@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema } from 'mongoose';
-import { User } from '../../users/schema/users.schema';
+import { Account } from 'src/modules/accounts/schema/account.schema';
 
 export enum TemplateType {
   TEXT = 'text',
@@ -18,18 +18,8 @@ export class Template {
   @Prop({ required: true })
   content: string;
   
-  @Prop({
-    type: String,
-    enum: Object.values(TemplateType),
-    default: TemplateType.CUSTOM
-  })
-  type: TemplateType;
-  
-  @Prop({ type: [String], default: [] })
-  tags: string[];
-  
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  user: User;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Account', required: true })
+  account: Account;
   
   @Prop({ default: false })
   isDefault: boolean;

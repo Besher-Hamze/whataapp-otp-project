@@ -10,16 +10,7 @@ export class CreateTemplateDto {
   @IsString()
   @IsNotEmpty()
   content: string;
-  
-  @IsEnum(TemplateType)
-  @IsOptional()
-  type?: TemplateType;
-  
-  @IsArray()
-  @IsOptional()
-  @Type(() => String)
-  tags?: string[];
-  
+
   @IsBoolean()
   @IsOptional()
   isDefault?: boolean;

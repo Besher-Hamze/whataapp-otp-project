@@ -19,8 +19,4 @@ export class CreateGroupDto {
   @ValidateNested({ each: true })
   @Type(() => ContactInGroupDto) // ✅ replace CreateContactDto
   phone_numbers: ContactInGroupDto[];
-
-  @IsMongoId()
-  @IsNotEmpty()
-  account: string;
 }

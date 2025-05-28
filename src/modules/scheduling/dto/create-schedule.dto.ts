@@ -16,12 +16,11 @@ export class CreateScheduleDto {
   @Type(() => Date)
   scheduledTime: Date;
 
-  @IsMongoId({ message: 'WhatsApp account ID must be a valid MongoDB ID' })
-  whatsappAccountId: string;
-
   @IsOptional()
   @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(1000, { message: 'Message delay must be at least 1000ms (1 second)' })
   @Max(60000, { message: 'Message delay cannot exceed 60000ms (1 minute)' })
   messageDelayMs?: number;
+
+  whatsappAccountId?: string;
 }

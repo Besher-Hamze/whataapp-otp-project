@@ -385,7 +385,24 @@ export class WhatsAppService implements OnModuleInit {
         const batch = to.slice(i, i + batchSize);
 
         const batchPromises = batch.map(async (recipient, batchIndex) => {
-          const chatId = recipient.includes('@') ? recipient : `${recipient}@c.us`;
+          // Clean the recipient: remove leading '+' and validate
+          let cleanedRecipient = recipient.startsWith('+') ? recipient.slice(1) : recipient;
+
+          // Remove any existing '@' suffix if present (to avoid duplicating it)
+          cleanedRecipient = cleanedRecipient.split('@')[0];
+
+          // Validate: ensure the cleaned number contains only digits
+          if (!/^\d+$/.test(cleanedRecipient)) {
+            this.logger.error(`❌ Invalid phone number format: ${cleanedRecipient}`);
+            results.push({ 
+              recipient, 
+              status: 'failed', 
+              error: 'Invalid phone number format: must contain only digits' 
+            });
+            return;
+          }
+
+          const chatId = `${cleanedRecipient}@c.us`;
           const globalIndex = i + batchIndex;
 
           try {
@@ -412,7 +429,7 @@ export class WhatsAppService implements OnModuleInit {
     } finally {
       this.sendingMessages.set(clientId, false);
     }
-  }
+}
 
   private performCleanup(clientId: string) {
     this.clients.delete(clientId);

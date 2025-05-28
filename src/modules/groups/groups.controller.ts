@@ -31,8 +31,11 @@ export class GroupsController {
     return this.groupsService.findAllGroups(accountId);
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string, @GetWhatsappAccountId() accountId: string) {
+   @Get(':id')
+  findOne(
+    @Param('id') id: string,
+    @GetWhatsappAccountId() accountId: string
+  ) {
     return this.groupsService.findGroupById(id, accountId);
   }
 

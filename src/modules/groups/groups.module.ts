@@ -15,5 +15,6 @@ import { ContactsModule } from '../contacts/contacts.module'; // ✅ Import here
   ],
   controllers: [GroupsController],
   providers: [GroupsService],
+  exports: [GroupsService]
 })
 export class GroupsModule {}

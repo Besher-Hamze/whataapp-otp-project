@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
-import { Group } from './schema/groups.schema';
+import { Group, GroupDocument } from './schema/groups.schema';
 import { Model, Types, HydratedDocument } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { PhoneService } from '../phone/phone.service';
@@ -98,25 +98,27 @@ async findAllGroups(accountId: string): Promise<Group[]> {
     .exec();
 }
 
-  async findGroupById(id: string, userId: string): Promise<Group | null> {
-    try {
-      const group = await this.groupModel
-        .findOne({ _id: id, user: userId })
-        .populate('contacts')
-        .exec();
+  async findGroupById(id: string, accountId: string): Promise<GroupDocument> {
+  try {
 
-      if (!group) {
-        throw new NotFoundException(`Group with ID "${id}" not found or does not belong to user`);
-      }
+    const objectAccountId = new Types.ObjectId(accountId);
+    const group = await this.groupModel
+      .findOne({ _id: id, account: objectAccountId })
+      .populate('contacts')
+      .exec();
 
-      return group;
-    } catch (error) {
-      if (error.name === 'CastError') {
-        throw new NotFoundException(`Invalid Group ID "${id}"`);
-      }
-      throw error;
+    if (!group) {
+      throw new NotFoundException(`Group with ID "${id}" not found or does not belong to account`);
     }
+
+    return group;
+  } catch (error: any) {
+    if (error.name === 'CastError') {
+      throw new NotFoundException(`Invalid Group ID "${id}"`);
+    }
+    throw error;
   }
+}
 
 async updateGroup(
   id: string,

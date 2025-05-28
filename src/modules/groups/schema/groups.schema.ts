@@ -20,5 +20,5 @@ export class Group extends Document {
   @Prop()
   updated_at: Date;
 }
-
+export type GroupDocument = Group & Document;
 export const GroupSchema = SchemaFactory.createForClass(Group);

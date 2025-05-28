@@ -1,4 +1,4 @@
-import { ConflictException, HttpException, HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
@@ -7,8 +7,10 @@ import * as QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
 import { InjectModel } from '@nestjs/mongoose';
 import { Account, AccountDocument } from '../accounts/schema/account.schema';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ModuleRef } from '@nestjs/core';
+import { ContactsService } from '../contacts/contacts.service';
+import { GroupsService } from '../groups/groups.service';
 
 interface MessageResult {
   recipient: string;
@@ -22,8 +24,25 @@ interface QRGenerationCache {
   timestamp: number;
 }
 
+function isValidObjectId(id: string | Types.ObjectId): boolean {
+ if (id instanceof Types.ObjectId) {
+        // If it's a Mongoose ObjectId instance, it's inherently valid
+        return true;
+    }
+    if (typeof id === 'string') {
+        // If it's a string, test it with the regex
+        return /^[a-fA-F0-9]{24}$/.test(id);
+    }
+    return false; // Not a string or ObjectId
+}
+
+function isPhoneNumber(value: string): boolean {
+  return /^\+\d+$/.test(value);
+}
+
 @Injectable()
 export class WhatsAppService implements OnModuleInit {
+  
   private readonly logger = new Logger(WhatsAppService.name);
   private readonly clients = new Map<string, Client>();
   private readonly socketClientMap = new Map<string, string>();
@@ -34,7 +53,6 @@ export class WhatsAppService implements OnModuleInit {
   private readonly qrCache = new Map<string, QRGenerationCache>();
   private readonly clientReadyPromises = new Map<string, Promise<void>>();
   private readonly initializationQueue = new Map<string, Promise<any>>();
-
   // Enhanced Puppeteer configuration
   private readonly puppeteerConfig = {
     headless: true,
@@ -74,7 +92,85 @@ export class WhatsAppService implements OnModuleInit {
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private moduleRef: ModuleRef,
-  ) { }
+    private readonly groupsService: GroupsService,
+    private readonly contactsService: ContactsService,
+  ) {}
+
+
+ async resolveRecipients(to: string[], clientId: string): Promise<string[]> {
+  this.logger.log(`🔍 Resolving recipients for clientId: ${clientId}, to: ${JSON.stringify(to)}`);
+
+  const account = await this.accountModel.findOne({ clientId }).exec();
+  if (!account) {
+    this.logger.error(`❌ No account found for clientId: ${clientId}`);
+    throw new NotFoundException(`No account found for clientId: ${clientId}`);
+  }
+  const accountId = account._id.toString();
+  this.logger.log(`✅ Account found, accountId: ${accountId}`);
+
+  const resolvedNumbersSet = new Set<string>();
+
+  for (const item of to) {
+    this.logger.log(`📋 Processing item: ${item}`);
+
+    if (isValidObjectId(item)) {
+      this.logger.log(`🔑 Item ${item} is a valid ObjectId, checking group or contact`);
+
+      const group = await this.groupsService.findGroupById(item, accountId).catch((err) => {
+        this.logger.error(`❌ Group lookup failed for ${item}: ${err.message}`);
+        return null;
+      });
+
+      if (group) {
+        this.logger.log(`✅ Found group for ${item}, processing contacts`);
+        // Ensure group.contacts is an array to prevent iteration issues
+        if (Array.isArray(group.contacts)) {
+          for (const contactItem of group.contacts) { // Renamed 'contact' to 'contactItem' to avoid conflict
+            // Check if contactItem is a full contact object (duck typing for phone_number)
+            if (typeof contactItem === 'object' && contactItem !== null && 'phone_number' in contactItem && typeof contactItem.phone_number === 'string') {
+              this.logger.log(`✅ Added contact phone number from group (object): ${contactItem.phone_number}`);
+              resolvedNumbersSet.add(contactItem.phone_number);
+            } else if (isValidObjectId(contactItem)) { // It's an ObjectId, so fetch the contact
+              const contactId = contactItem.toString(); // Now contactItem is confirmed as an ObjectId or something that can be stringified.
+              const foundContact = await this.contactsService.findContactById(contactId, accountId).catch((err) => {
+                this.logger.error(`❌ Contact lookup failed for ${contactId}: ${err.message}`);
+                return null;
+              });
+              if (foundContact) {
+                this.logger.log(`✅ Added contact phone number from group (fetched): ${foundContact.phone_number}`);
+                resolvedNumbersSet.add(foundContact.phone_number);
+              } else {
+                this.logger.warn(`⚠️ No contact found for ${contactId} in group`);
+              }
+            } else {
+              this.logger.warn(`⚠️ Unexpected type for contact in group: ${JSON.stringify(contactItem)}`);
+            }
+          }
+        }
+        continue;
+      }
+
+      const contact = await this.contactsService.findContactById(item, accountId).catch((err) => {
+        this.logger.error(`❌ Contact lookup failed for ${item}: ${err.message}`);
+        return null;
+      });
+      if (contact) {
+        this.logger.log(`✅ Found contact for ${item}, phone number: ${contact.phone_number}`);
+        resolvedNumbersSet.add(contact.phone_number);
+        continue;
+      } else {
+        this.logger.warn(`⚠️ No group or contact found for ObjectId ${item}`);
+      }
+    } else {
+      this.logger.log(`📞 Item ${item} is not an ObjectId, treating as raw number`);
+      resolvedNumbersSet.add(item);
+    }
+  }
+
+  const resolvedNumbers = Array.from(resolvedNumbersSet);
+  this.logger.log(`✅ Resolved numbers: ${JSON.stringify(resolvedNumbers)}`);
+  return resolvedNumbers;
+}
 
   async onModuleInit() {
     // Load existing sessions in background
@@ -378,11 +474,11 @@ export class WhatsAppService implements OnModuleInit {
     try {
       const results: MessageResult[] = [];
       const batchSize = 5; // Process in small batches
+      const resolvedTo = await this.resolveRecipients(to, clientId);
+      this.logger.log(`📤 Sending to ${resolvedTo.length} recipients with ${delayMs}ms delay`);
 
-      this.logger.log(`📤 Sending to ${to.length} recipients with ${delayMs}ms delay`);
-
-      for (let i = 0; i < to.length; i += batchSize) {
-        const batch = to.slice(i, i + batchSize);
+      for (let i = 0; i < resolvedTo.length; i += batchSize) {
+        const batch = resolvedTo.slice(i, i + batchSize);
 
         const batchPromises = batch.map(async (recipient, batchIndex) => {
           // Clean the recipient: remove leading '+' and validate

@@ -10,7 +10,8 @@ import { Token } from './schema/refresh-token.schema';
 import { AccountsService } from '../accounts/accounts.service';
 import { UserDocument } from '../users/schema/users.schema'; // Update import
 import { AccountDocument } from '../accounts/schema/account.schema'; // Update import
-import { log } from 'console';
+import { v4 as uuidv4 } from 'uuid';
+import { ApiKey } from '../OTP/schema/api-key.schema';
 
 @Injectable()
 export class AuthService {
@@ -21,6 +22,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     @InjectModel(Token.name) private tokenModel: Model<Token>,
     private readonly accountService: AccountsService,
+    @InjectModel(ApiKey.name) private apiKeyModel: Model<ApiKey>
   ) {
     if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
       throw new Error('JWT_SECRET or JWT_REFRESH_SECRET is not defined');
@@ -284,4 +286,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
   }
+
+  async generateApiKey(userId: string): Promise<string> {
+    const apiKey = uuidv4(); // Generate a unique API key
+    const newApiKey = new this.apiKeyModel({
+      key: apiKey,
+      userId,
+      isActive: true,
+    });
+
+    await newApiKey.save();
+    return apiKey;
+  }
+
 }

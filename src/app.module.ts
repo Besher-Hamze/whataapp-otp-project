@@ -6,6 +6,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { UsersModule } from './modules/users/users.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { OtpModule } from './modules/OTP/otp.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
@@ -65,6 +66,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     RulesModule,
     AutoResponderModule,
     TemplatesModule,
+    OtpModule
   ],
   controllers: [AppController],
   providers: [

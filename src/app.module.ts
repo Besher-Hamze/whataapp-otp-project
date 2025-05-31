@@ -10,9 +10,7 @@ import { OtpModule } from './modules/OTP/otp.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
-import { MessagesModule } from './modules/messages/messages.module';
 import { GroupsModule } from './modules/groups/groups.module';
-import { SavedMessagesModule } from './modules/saved-masseges/saved-messages.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { RulesModule } from './modules/rules/rules.module';
 import { AutoResponderModule } from './modules/auto-responder/auto-responder.module';
@@ -59,9 +57,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     AuthModule,
     WhatsappModule,
     ContactsModule,
-    MessagesModule,
     GroupsModule,
-    SavedMessagesModule,
     SchedulingModule,
     RulesModule,
     AutoResponderModule,

@@ -11,6 +11,7 @@ import { Model, Types } from 'mongoose';
 import { ModuleRef } from '@nestjs/core';
 import { ContactsService } from '../contacts/contacts.service';
 import { GroupsService } from '../groups/groups.service';
+import { TemplatesService } from '../templates/templates.service';
 
 interface MessageResult {
   recipient: string;
@@ -94,6 +95,7 @@ export class WhatsAppService implements OnModuleInit {
     private moduleRef: ModuleRef,
     private readonly groupsService: GroupsService,
     private readonly contactsService: ContactsService,
+    private templatesService: TemplatesService,
   ) {}
 
 
@@ -171,6 +173,40 @@ export class WhatsAppService implements OnModuleInit {
   this.logger.log(`✅ Resolved numbers: ${JSON.stringify(resolvedNumbers)}`);
   return resolvedNumbers;
 }
+
+private async resolveMessageContent(message: string, clientId: string): Promise<string> {
+    this.logger.debug(`🔍 Resolving message content for clientId: ${clientId}, input: ${message}`);
+
+    // Check if message is a valid ObjectId (potential template ID)
+    if (Types.ObjectId.isValid(message)) {
+      this.logger.debug(`🔍 Input "${message}" is a valid ObjectId, checking as template ID`);
+
+      try {
+        const account = await this.accountModel.findOne({ clientId }).exec();
+        if (!account) {
+          this.logger.error(`❌ No account found for clientId: ${clientId}`);
+          throw new NotFoundException(`No account found for clientId: ${clientId}`);
+        }
+        const accountId = account._id.toString();
+        this.logger.debug(`🔍 Found accountId: ${accountId} for clientId: ${clientId}`);
+
+        const template = await this.templatesService.findById(message, accountId);
+        this.logger.debug(`🔍 Using template ${message} content: ${template.content}`);
+        return template.content;
+      } catch (error) {
+        if (error instanceof NotFoundException) {
+          this.logger.warn(`⚠️ Template "${message}" not found or doesn't belong to account, falling back to raw message`);
+          return message; // Fallback to raw message
+        }
+        this.logger.error(`❌ Unexpected error resolving template ${message}: ${error.message}`);
+        throw error; // Re-throw other errors (e.g., database issues)
+      }
+    }
+
+    // Not a valid ObjectId, treat as raw message
+    this.logger.debug(`🔍 Input "${message}" is not a valid ObjectId, treating as raw message`);
+    return message;
+  }
 
   async onModuleInit() {
     // Load existing sessions in background
@@ -408,38 +444,44 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   private async handleIncomingMessage(message: Message, clientId: string) {
-    try {
-      if (message.fromMe) return;
-
-      // Optimized account lookup
-      const account = await this.accountModel.findOne(
-        { clientId },
-        { _id: 1, user: 1 }
-      ).lean().exec();
-
-      if (!account) {
-        this.logger.warn(`📱 No account found for client ${clientId}`);
-        return;
-      }
-
-      const accountId = account._id.toString();
-      const sender = message.from.split('@')[0];
-
-      this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
-
-      // Process handlers in parallel
-      const handlerPromises = this.messageHandlers.map(handler =>
-        handler(message, accountId).catch(error =>
-          this.logger.error(`Handler error: ${error.message}`)
-        )
-      );
-
-      await Promise.allSettled(handlerPromises);
-
-    } catch (error) {
-      this.logger.error(`❌ Message handling error: ${error.message}`);
+  try {
+    // Filter out broadcast messages (e.g., status updates)
+    if (message.from.endsWith('@broadcast')) {
+      this.logger.debug(`Ignoring broadcast message from ${message.from}`);
+      return;
     }
+
+    if (message.fromMe) return;
+
+    // Optimized account lookup
+    const account = await this.accountModel.findOne(
+      { clientId },
+      { _id: 1, user: 1 }
+    ).lean().exec();
+
+    if (!account) {
+      this.logger.warn(`📱 No account found for client ${clientId}`);
+      return;
+    }
+
+    const accountId = account._id.toString();
+    const sender = message.from.split('@')[0];
+
+    this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
+
+    // Process handlers in parallel
+    const handlerPromises = this.messageHandlers.map(handler =>
+      handler(message, accountId).catch(error =>
+        this.logger.error(`Handler error: ${error.message}`)
+      )
+    );
+
+    await Promise.allSettled(handlerPromises);
+
+  } catch (error) {
+    this.logger.error(`❌ Message handling error: ${error.message}`);
   }
+}
 
   async sendMessage(clientId: string, to: string[], message: string, delayMs: number = 3000) {
     const client = this.clients.get(clientId);
@@ -472,11 +514,20 @@ export class WhatsAppService implements OnModuleInit {
     this.sendingMessages.set(clientId, true);
 
     try {
+      this.logger.log(`📤 Starting message resolution and sending for clientId: ${clientId}`);
+      const resolvedContent = await this.resolveMessageContent(message, clientId);
+      this.logger.debug(`📤 Resolved content to send: ${resolvedContent}`);
       const results: MessageResult[] = [];
       const batchSize = 5; // Process in small batches
       const resolvedTo = await this.resolveRecipients(to, clientId);
       this.logger.log(`📤 Sending to ${resolvedTo.length} recipients with ${delayMs}ms delay`);
 
+      // Check if no valid recipients were resolved
+    if (resolvedTo.length === 0) {
+      this.logger.warn(`⚠️ No valid recipients found for clientId: ${clientId}, skipping send operation`);
+      return { message: 'No valid recipients found', results: [] };
+    }
+    
       for (let i = 0; i < resolvedTo.length; i += batchSize) {
         const batch = resolvedTo.slice(i, i + batchSize);
 
@@ -502,7 +553,7 @@ export class WhatsAppService implements OnModuleInit {
           const globalIndex = i + batchIndex;
 
           try {
-            await client.sendMessage(chatId, message);
+            await client.sendMessage(chatId, resolvedContent);
             results.push({ recipient, status: 'sent' });
             this.logger.debug(`✅ Sent to ${chatId} (${globalIndex + 1}/${to.length})`);
           } catch (error) {
@@ -526,7 +577,7 @@ export class WhatsAppService implements OnModuleInit {
       this.sendingMessages.set(clientId, false);
     }
 }
-
+ 
   private performCleanup(clientId: string) {
     this.clients.delete(clientId);
     this.sendingMessages.delete(clientId);

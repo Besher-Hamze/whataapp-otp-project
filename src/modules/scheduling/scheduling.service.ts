@@ -158,8 +158,8 @@ export class SchedulingService {
     return updatedSchedule;
   }
 
-  async remove(id: string, userId: string) {
-    const schedule = await this.findOne(id, userId);
+  async remove(id: string, accountId: string) {
+    const schedule = await this.findOne(id, accountId);
     
     // Don't allow deleting processing schedules
     if (schedule.status === ScheduleStatus.PROCESSING) {

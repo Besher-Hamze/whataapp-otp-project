@@ -36,7 +36,6 @@ export class SchedulingController {
   update(
     @Param('id') id: string,
     @Body() updateScheduleDto: UpdateScheduleDto,
-    @GetUserId() userId: string,
     @GetWhatsappAccountId() accountId: string
   ) {
       return this.schedulingService.update(id, updateScheduleDto, accountId);
@@ -45,9 +44,9 @@ export class SchedulingController {
   @Delete(':id')
   remove(
     @Param('id') id: string,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.schedulingService.remove(id, userId);
+    return this.schedulingService.remove(id, accountId);
   }
 
   @Post(':id/cancel')

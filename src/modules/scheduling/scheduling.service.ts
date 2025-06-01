@@ -97,12 +97,23 @@ export class SchedulingService {
     }
   }
 
-  async findAll(accountId: string) {
-    return this.scheduleModel.find({ whatsappAccount: accountId })
-      .sort({ scheduledTime: -1 })
-      .populate('whatsappAccount', 'name phone_number')
-      .exec();
-  }
+async findAll(accountId: string) {
+  const currentDate = new Date();
+  return this.scheduleModel
+    .find({
+      whatsappAccount: accountId,
+      $or: [
+        { status: { $ne: ScheduleStatus.COMPLETED } },
+        {
+          status: ScheduleStatus.COMPLETED,
+          scheduledTime: { $gt: currentDate },
+        },
+      ],
+    })
+    .sort({ scheduledTime: -1 })
+    .populate('whatsappAccount', 'name phone_number')
+    .exec();
+}
 
   async findOne(id: string, accountId: string) {
     const schedule = await this.scheduleModel.findOne({ _id: id, whatsappAccount: accountId })

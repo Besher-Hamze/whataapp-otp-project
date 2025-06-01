@@ -2,13 +2,15 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, Put, UseGuards } fro
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { GetUserId } from 'src/common/decorators';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
 
 @UseGuards(JwtGuard)
 @Controller('accounts')
 export class AccountsController {
-  constructor(private readonly accountsService: AccountsService) {}
+  constructor(private readonly accountsService: AccountsService,
+  ) {}
 
   @Post()
   create(@Body() createAccountDto: CreateAccountDto) {
@@ -35,8 +37,4 @@ export class AccountsController {
     return this.accountsService.updateAccount(id, updateAccountDto);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.accountsService.deleteAccount(id);
-  }
 }

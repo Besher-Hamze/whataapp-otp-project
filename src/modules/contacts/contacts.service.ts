@@ -34,7 +34,7 @@ export class ContactsService {
     });
 
     if (existingContact) {
-      throw new ConflictException('Contact with this phone number already exists');
+      return existingContact;
     }
 
     try {

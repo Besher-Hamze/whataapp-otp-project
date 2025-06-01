@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -10,7 +10,8 @@ import { Token } from './schema/refresh-token.schema';
 import { AccountsService } from '../accounts/accounts.service';
 import { UserDocument } from '../users/schema/users.schema'; // Update import
 import { AccountDocument } from '../accounts/schema/account.schema'; // Update import
-import { log } from 'console';
+import { v4 as uuidv4 } from 'uuid';
+import { ApiKey } from '../OTP/schema/api-key.schema';
 
 @Injectable()
 export class AuthService {
@@ -21,6 +22,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     @InjectModel(Token.name) private tokenModel: Model<Token>,
     private readonly accountService: AccountsService,
+    @InjectModel(ApiKey.name) private apiKeyModel: Model<ApiKey>
   ) {
     if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
       throw new Error('JWT_SECRET or JWT_REFRESH_SECRET is not defined');
@@ -67,50 +69,90 @@ export class AuthService {
     };
   }
 
-  async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: string }> {
-    const { email, password } = loginDto;
-    const user = await this.usersService.findUserByEmail(email);
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
+async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: string; message: string }> {
+  const { email, password } = loginDto;
+  this.logger.log(`Starting login process for email: ${email}`);
 
-    const isPasswordValid = await this.usersService.comparePassword(password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    const payload = { sub: user._id, email: user.email };
-    const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: '1d',
-    });
-    const refreshToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_REFRESH_SECRET,
-      expiresIn: '7d',
-    });
-
-    try {
-      await Promise.all([
-        this.tokenModel.create({
-          userId: user._id,
-          token: accessToken,
-          type: 'access',
-          expiresAt: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
-        }),
-        this.tokenModel.create({
-          userId: user._id,
-          token: refreshToken,
-          type: 'refresh',
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        }),
-      ]);
-    } catch (error) {
-      this.logger.error(`Failed to save tokens: ${error.message}`);
-      throw new InternalServerErrorException('Failed to process login');
-    }
-
-    return { access_token: accessToken, refresh_token: refreshToken };
+  // Validate user credentials
+  this.logger.debug(`Fetching user with email: ${email}`);
+  const user = await this.usersService.findUserByEmail(email);
+  if (!user) {
+    this.logger.warn(`User not found for email: ${email}`);
+    throw new UnauthorizedException('Invalid credentials');
   }
+  this.logger.debug(`Found user: ${user.email} (userId: ${user._id})`);
+
+  this.logger.debug(`Validating password for user: ${user.email}`);
+  const isPasswordValid = await this.usersService.comparePassword(password, user.password);
+  if (!isPasswordValid) {
+    this.logger.warn(`Invalid password attempt for user: ${user.email}`);
+    throw new UnauthorizedException('Invalid credentials');
+  }
+  this.logger.log(`Password validated successfully for user: ${user.email}`);
+
+  // Generate fallback tokens without account_id
+  this.logger.debug(`Generating fallback tokens without account_id for user: ${user.email}`);
+  const payload = { sub: user._id, email: user.email };
+  let accessToken = this.jwtService.sign(payload, {
+    secret: process.env.JWT_SECRET,
+    expiresIn: '1d',
+  });
+  let refreshToken = this.jwtService.sign(payload, {
+    secret: process.env.JWT_REFRESH_SECRET,
+    expiresIn: '7d',
+  });
+
+  try {
+    this.logger.debug(`Saving fallback tokens for userId: ${user._id}`);
+    await Promise.all([
+      this.tokenModel.create({
+        userId: user._id,
+        token: accessToken,
+        type: 'access',
+        expiresAt: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
+      }),
+      this.tokenModel.create({
+        userId: user._id,
+        token: refreshToken,
+        type: 'refresh',
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }),
+    ]);
+    this.logger.log(`Fallback tokens saved successfully for user: ${user.email}`);
+  } catch (error) {
+    this.logger.error(`Failed to save fallback tokens for userId: ${user._id}: ${error.message}`, error.stack);
+    throw new InternalServerErrorException('Failed to process login');
+  }
+
+  let message = 'No default account selected';
+
+  // Attempt to fetch and select a default account
+  this.logger.debug(`Attempting to fetch accounts for userId: ${user._id}`);
+  try {
+    const accounts = await this.accountService.findAccountsByUser(user._id.toString());
+    this.logger.log(`Found ${accounts.length} account(s) for userId: ${user._id}`);
+
+    if (accounts.length > 0) {
+      const defaultAccount = accounts[0];
+      this.logger.log(`Selecting first account as default: ${defaultAccount._id} (phone: ${defaultAccount.phone_number || 'unknown'})`);
+      const tokenResponse = await this.selectAccount(user._id.toString(), defaultAccount._id.toString());
+      accessToken = tokenResponse.access_token;
+      refreshToken = tokenResponse.refresh_token;
+      message = `Default account selected: ${defaultAccount._id}`;
+      this.logger.log(`Tokens updated with account_id: ${defaultAccount._id} for user: ${user.email}`);
+    }
+  } catch (error) {
+    if (error instanceof NotFoundException) {
+      this.logger.warn(`No accounts found for userId: ${user._id}, proceeding with fallback tokens`);
+    } else {
+      this.logger.error(`Error fetching accounts for userId: ${user._id}: ${error.message}`, error.stack);
+      this.logger.warn(`Falling back to fallback tokens for user: ${user.email}`);
+    }
+  }
+
+  this.logger.log(`Login successful for user: ${user.email}, message: ${message}`);
+  return { access_token: accessToken, refresh_token: refreshToken, message };
+}
 
   async selectAccount(userId: string, accountId: string): Promise<{ access_token: string; refresh_token: string }> {
     this.logger.log(`Starting selectAccount for userId: ${userId}, accountId: ${accountId}`);
@@ -284,4 +326,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
   }
+
+  async generateApiKey(userId: string): Promise<string> {
+    const apiKey = uuidv4(); // Generate a unique API key
+    const newApiKey = new this.apiKeyModel({
+      key: apiKey,
+      userId,
+      isActive: true,
+    });
+
+    await newApiKey.save();
+    return apiKey;
+  }
+
 }

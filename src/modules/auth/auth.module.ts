@@ -7,6 +7,9 @@ import { UsersModule } from '../users/users.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from 'src/common/jwt/jwt.strategy';
+import { OtpModule } from '../OTP/otp.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { ApiKey, ApiKeySchema } from '../OTP/schema/api-key.schema';
 
 @Module({
   imports: [
@@ -17,6 +20,9 @@ import { JwtStrategy } from 'src/common/jwt/jwt.strategy';
     }),
     UsersModule,
     AccountsModule,
+    OtpModule,
+    WhatsappModule,
+    MongooseModule.forFeature([{ name: ApiKey.name, schema: ApiKeySchema }]),
   ],
   providers: [AuthService, JwtStrategy],
   controllers: [AuthController],

@@ -9,6 +9,7 @@ import { UsersModule } from '../users/users.module';
 import { WhatsAppGateway } from './whatsapp.gateway';
 import { GroupsModule } from '../groups/groups.module';
 import { ContactsModule } from '../contacts/contacts.module';
+import { TemplatesModule } from '../templates/templates.module';
 
 @Module({
   imports: [
@@ -19,7 +20,8 @@ import { ContactsModule } from '../contacts/contacts.module';
     UsersModule,
     AccountsModule,
     GroupsModule,
-    ContactsModule
+    ContactsModule,
+    TemplatesModule
   ],
   controllers: [WhatsAppController],
   providers: [WhatsAppGateway, WhatsAppService],

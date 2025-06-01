@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, BadRequestException, UseGuards, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, BadRequestException, UseGuards, Query, Delete } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
 import { Model } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
@@ -69,6 +69,12 @@ export class WhatsAppController {
     };
   }
 
+  @Delete('account/:id')
+  @UseGuards(JwtGuard)
+  async deleteAccount(@Param('id') id: string) {
+    return await this.whatsappService.deleteAccount(id);
+  }
+
   @Get('accounts')
   async getAccounts(@GetUserId() userId: string) {
     // Only return accounts for the current user
@@ -98,4 +104,6 @@ export class WhatsAppController {
 
     return account;
   }
+
+
 }

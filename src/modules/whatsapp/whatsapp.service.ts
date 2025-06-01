@@ -1,5 +1,7 @@
 import { ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import * as path from 'path';
+import { rmSync } from 'fs';
+import { join } from 'path';
 import * as fs from 'fs';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
@@ -26,15 +28,9 @@ interface QRGenerationCache {
 }
 
 function isValidObjectId(id: string | Types.ObjectId): boolean {
- if (id instanceof Types.ObjectId) {
-        // If it's a Mongoose ObjectId instance, it's inherently valid
-        return true;
-    }
-    if (typeof id === 'string') {
-        // If it's a string, test it with the regex
-        return /^[a-fA-F0-9]{24}$/.test(id);
-    }
-    return false; // Not a string or ObjectId
+  if (id instanceof Types.ObjectId) return true;
+  if (typeof id === 'string') return /^[a-fA-F0-9]{24}$/.test(id);
+  return false;
 }
 
 function isPhoneNumber(value: string): boolean {
@@ -43,18 +39,15 @@ function isPhoneNumber(value: string): boolean {
 
 @Injectable()
 export class WhatsAppService implements OnModuleInit {
-  
   private readonly logger = new Logger(WhatsAppService.name);
   private readonly clients = new Map<string, Client>();
   private readonly socketClientMap = new Map<string, string>();
   private readonly sendingMessages = new Map<string, boolean>();
   private readonly messageHandlers: Array<(message: any, accountId: string) => Promise<void>> = [];
-
-  // Performance optimizations
   private readonly qrCache = new Map<string, QRGenerationCache>();
   private readonly clientReadyPromises = new Map<string, Promise<void>>();
-  private readonly initializationQueue = new Map<string, Promise<any>>();
-  // Enhanced Puppeteer configuration
+  private readonly initializationQueue = new Map<string, Promise<any>>;
+
   private readonly puppeteerConfig = {
     headless: true,
     args: [
@@ -81,13 +74,13 @@ export class WhatsAppService implements OnModuleInit {
       '--disable-component-update',
       '--disable-domain-reliability',
       '--disable-features=AudioServiceOutOfProcess',
-      '--single-process', // Critical for VPS environments
+      '--single-process',
       '--memory-pressure-off',
-      '--max_old_space_size=4096'
+      '--max_old_space_size=4096',
     ],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    timeout: 60000, // Increase timeout for slow VPS
-    protocolTimeout: 60000
+    timeout: 60000,
+    protocolTimeout: 60000,
   };
 
   constructor(
@@ -98,8 +91,7 @@ export class WhatsAppService implements OnModuleInit {
     private templatesService: TemplatesService,
   ) {}
 
-
- async resolveRecipients(to: string[], clientId: string): Promise<string[]> {
+  async resolveRecipients(to: string[], clientId: string): Promise<string[]> {
   this.logger.log(`🔍 Resolving recipients for clientId: ${clientId}, to: ${JSON.stringify(to)}`);
 
   const account = await this.accountModel.findOne({ clientId }).exec();
@@ -209,12 +201,9 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
   }
 
   async onModuleInit() {
-    // Load existing sessions in background
     setImmediate(() => this.loadClientsFromSessions());
-
-    // Setup cleanup intervals
-    setInterval(() => this.cleanupExpiredQRCodes(), 300000); // Every 5 minutes
-    setInterval(() => this.cleanupStaleConnections(), 600000); // Every 10 minutes
+    setInterval(() => this.cleanupExpiredQRCodes(), 300000);
+    setInterval(() => this.cleanupStaleConnections(), 600000);
   }
 
   registerMessageHandler(handler: (message: any, accountId: string) => Promise<void>) {
@@ -223,7 +212,11 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
   }
 
   async startSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
-    // Prevent duplicate initialization
+    if (this.socketClientMap.has(socketClientId)) {
+      const existingClientId = this.socketClientMap.get(socketClientId)!;
+      const client = this.clients.get(existingClientId);
+      if (client) return { clientId: existingClientId };
+    }
     if (this.initializationQueue.has(socketClientId)) {
       this.logger.warn(`🔄 Session initialization already in progress for: ${socketClientId}`);
       return this.initializationQueue.get(socketClientId)!;
@@ -231,7 +224,6 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
 
     const initPromise = this.doStartSession(socketClientId, userId, emit);
     this.initializationQueue.set(socketClientId, initPromise);
-
     try {
       const result = await initPromise;
       return result;
@@ -241,7 +233,6 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
   }
 
   private async doStartSession(socketClientId: string, userId: string, emit: (event: string, data: any) => void) {
-    // Check for existing session
     if (this.socketClientMap.has(socketClientId)) {
       const existingClientId = this.socketClientMap.get(socketClientId)!;
       this.logger.warn(`⚠️ Session exists for socket: ${socketClientId}`);
@@ -251,7 +242,6 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
 
     const clientId = uuidv4();
     const startTime = Date.now();
-
     this.logger.log(`🚀 Starting session ${clientId} for socket: ${socketClientId}`);
     this.socketClientMap.set(socketClientId, clientId);
 
@@ -261,329 +251,242 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
         puppeteer: this.puppeteerConfig,
       });
 
-      // Setup event handlers BEFORE initialization
       this.setupClientEventHandlers(client, clientId, emit, userId);
-
-      // Store client immediately to prevent race conditions
       this.clients.set(clientId, client);
 
-      // Create ready promise for tracking
       let readyResolve: () => void;
-      const readyPromise = new Promise<void>((resolve) => {
-        readyResolve = resolve;
-      });
+      const readyPromise = new Promise<void>((resolve) => { readyResolve = resolve; });
       this.clientReadyPromises.set(clientId, readyPromise);
-
-      // Enhanced ready handler
       client.once('ready', () => {
         const duration = Date.now() - startTime;
         this.logger.log(`✅ Client ${clientId} ready in ${duration}ms`);
         readyResolve();
       });
 
-      // Initialize with timeout
       const initTimeout = setTimeout(() => {
         this.logger.error(`⏰ Client ${clientId} initialization timeout`);
-        emit('initialization_timeout', { clientId });
-      }, 120000); // 2 minutes
-
+        emit('initialization_failed', { clientId });
+      }, 120000);
       await client.initialize();
       clearTimeout(initTimeout);
 
       const duration = Date.now() - startTime;
       this.logger.log(`🎉 Session ${clientId} started in ${duration}ms`);
-
       return { clientId };
-
     } catch (error) {
       this.logger.error(`❌ Failed to start session ${clientId}: ${error.message}`);
-
-      // Cleanup on failure
       this.clients.delete(clientId);
       this.socketClientMap.delete(socketClientId);
       this.clientReadyPromises.delete(clientId);
-
       emit('initialization_failed', {
         clientId,
         error: error.message,
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       });
-
       throw error;
     }
   }
 
   private setupClientEventHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void, userId: string) {
-    // QR Code handler with caching and optimization
     client.on('qr', async (qr) => {
       const qrStartTime = Date.now();
       this.logger.log(`📱 QR received for ${clientId} - generating...`);
-
       try {
-        // Check cache first
         const cached = this.qrCache.get(qr);
-        if (cached && Date.now() - cached.timestamp < 30000) { // 30 second cache
+        if (cached && Date.now() - cached.timestamp < 30000) {
           emit('qr', { clientId, qr: cached.dataUrl });
-          this.logger.debug(`⚡ QR served from cache in ${Date.now() - qrStartTime}ms`);
           return;
         }
-
-        // Generate QR with optimized settings
         const qrDataUrl = await QRCode.toDataURL(qr, {
-          errorCorrectionLevel: 'M', // Medium error correction (faster)
+          errorCorrectionLevel: 'M',
           type: 'image/png',
-          quality: 0.8, // Reduce quality for speed
+          quality: 0.8,
           margin: 1,
-          color: {
-            dark: '#000000',
-            light: '#FFFFFF'
-          },
-          width: 256 // Fixed width for consistency
+          color: { dark: '#000000', light: '#FFFFFF' },
+          width: 256,
         });
-
-        // Cache the result
-        this.qrCache.set(qr, {
-          qr,
-          dataUrl: qrDataUrl,
-          timestamp: Date.now()
-        });
-
-        // Emit to frontend
+        this.qrCache.set(qr, { qr, dataUrl: qrDataUrl, timestamp: Date.now() });
         emit('qr', { clientId, qr: qrDataUrl });
-
-        // Optional: Show in terminal (async to not block)
-        setImmediate(() => {
-          qrcodeTerminal.generate(qr, { small: true });
-        });
-
-        const qrDuration = Date.now() - qrStartTime;
-        this.logger.log(`✅ QR generated and sent in ${qrDuration}ms`);
-
+        setImmediate(() => qrcodeTerminal.generate(qr, { small: true }));
+        this.logger.log(`✅ QR generated and sent in ${Date.now() - qrStartTime}ms`);
       } catch (error) {
         this.logger.error(`❌ QR generation failed: ${error.message}`);
-        emit('qr_error', { clientId, error: error.message });
+        emit('initialization_failed', { clientId, error: error.message });
       }
     });
 
-    // Optimized message handler
-    client.on('message', async (message) => {
-      // Process in background to not block other operations
-      setImmediate(() => this.handleIncomingMessage(message, clientId));
-    });
-
-    // Authentication events
+    client.on('message', async (message) => setImmediate(() => this.handleIncomingMessage(message, clientId)));
     client.on('authenticated', () => {
       this.logger.log(`🔐 ${clientId} authenticated`);
       emit('authenticated', { clientId });
     });
-
     client.on('auth_failure', () => {
       this.logger.error(`🚫 ${clientId} authentication failed`);
       emit('auth_failure', { clientId });
       this.performCleanup(clientId);
     });
-
-    // Ready event with account creation
     client.on('ready', async () => {
       try {
         const userInfo = client.info;
         const phoneNumber = userInfo?.wid?.user || 'Unknown';
         const name = userInfo?.pushname || 'Unknown';
-
         this.logger.log(`📞 ${clientId} logged in as: ${name} (${phoneNumber})`);
-
-        // Check for existing account (optimized query)
-        const existingAccount = await this.accountModel.findOne(
-          { phone_number: phoneNumber },
-          { _id: 1, phone_number: 1 }
-        ).lean().exec();
-
+        const existingAccount = await this.accountModel.findOne({ phone_number: phoneNumber }, { _id: 1, phone_number: 1 }).lean().exec();
         if (existingAccount) {
           this.logger.warn(`⚠️ Phone number already exists: ${phoneNumber}`);
           emit('phone_exists', { clientId, phoneNumber });
           return;
         }
-
-        // Create account
         await this.accountModel.create({
           name,
           phone_number: phoneNumber,
           user: userId,
           clientId,
           status: 'active',
-          created_at: new Date()
+          created_at: new Date(),
         });
-
         emit('ready', {
           phoneNumber,
           name,
           clientId,
           status: 'active',
-          message: 'WhatsApp client ready and account saved.'
+          message: 'WhatsApp client ready and account saved.',
         });
-
       } catch (error) {
         this.logger.error(`❌ Ready handler error: ${error.message}`);
-        emit('ready_error', { clientId, error: error.message });
+        emit('initialization_failed', { clientId, error: error.message });
       }
     });
-
-    // Disconnection handler
     client.on('disconnected', async (reason) => {
       this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
-      emit('disconnected', { clientId, reason });
-
-      // Update database status
-      await this.accountModel.updateOne(
-        { clientId },
-        { status: 'disconnected', disconnected_at: new Date() }
-      ).exec();
-
-      this.performCleanup(clientId);
+      const account = await this.accountModel.findOne({ clientId }).exec();
+      if (account) {
+        if (reason && (reason.toLowerCase().includes('logout') || reason.toLowerCase().includes('conflict'))) {
+          this.logger.log(`🔒 ${clientId} logged out or conflict detected, performing cleanup`);
+          await this.accountModel.updateOne({ clientId }, { status: 'disconnected', disconnected_at: new Date() }).exec();
+          this.performCleanup(clientId);
+        } else {
+          this.logger.log(`🔄 ${clientId} disconnected but not logged out, keeping session alive`);
+          // Attempt to reconnect
+          try {
+            await client.initialize();
+            const state = await client.getState();
+            if (state === 'CONNECTED') {
+              await this.accountModel.updateOne({ clientId }, { status: 'active', disconnected_at: null }).exec();
+              this.logger.log(`✅ ${clientId} reconnected successfully`);
+            }
+          } catch (error) {
+            this.logger.error(`❌ Reconnection failed for ${clientId}: ${error.message}`);
+            await this.accountModel.updateOne({ clientId }, { status: 'disconnected', disconnected_at: new Date() }).exec();
+            this.performCleanup(clientId);
+          }
+        }
+      }
     });
   }
 
   private async handleIncomingMessage(message: Message, clientId: string) {
-  try {
-    // Filter out broadcast messages (e.g., status updates)
-    if (message.from.endsWith('@broadcast')) {
-      this.logger.debug(`Ignoring broadcast message from ${message.from}`);
-      return;
+    try {
+      if (message.from.endsWith('@broadcast') || message.fromMe) return;
+      const account = await this.accountModel.findOne({ clientId }, { _id: 1, user: 1 }).lean().exec();
+      if (!account) {
+        this.logger.warn(`📱 No account found for client ${clientId}`);
+        return;
+      }
+      const accountId = account._id.toString();
+      const sender = message.from.split('@')[0];
+      this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
+      await Promise.allSettled(this.messageHandlers.map(handler => handler(message, accountId).catch(err => this.logger.error(`Handler error: ${err.message}`))));
+    } catch (error) {
+      this.logger.error(`❌ Message handling error: ${error.message}`);
     }
-
-    if (message.fromMe) return;
-
-    // Optimized account lookup
-    const account = await this.accountModel.findOne(
-      { clientId },
-      { _id: 1, user: 1 }
-    ).lean().exec();
-
-    if (!account) {
-      this.logger.warn(`📱 No account found for client ${clientId}`);
-      return;
-    }
-
-    const accountId = account._id.toString();
-    const sender = message.from.split('@')[0];
-
-    this.logger.debug(`📨 Message from ${sender} to ${accountId}`);
-
-    // Process handlers in parallel
-    const handlerPromises = this.messageHandlers.map(handler =>
-      handler(message, accountId).catch(error =>
-        this.logger.error(`Handler error: ${error.message}`)
-      )
-    );
-
-    await Promise.allSettled(handlerPromises);
-
-  } catch (error) {
-    this.logger.error(`❌ Message handling error: ${error.message}`);
   }
-}
 
   async sendMessage(clientId: string, to: string[], message: string, delayMs: number = 3000) {
     const client = this.clients.get(clientId);
-    if (!client) {
-      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
-    }
+    if (!client) throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
 
-    // Check if client is ready
-    if (!this.isClientReady(clientId)) {
-      // Wait for ready state with timeout
-      const readyPromise = this.clientReadyPromises.get(clientId);
-      if (readyPromise) {
-        await Promise.race([
-          readyPromise,
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Client ready timeout')), 30000)
-          )
-        ]);
+    // Check and reconnect if necessary
+    let state = await client.getState();
+    if (state !== 'CONNECTED') {
+      this.logger.warn(`Client ${clientId} is not connected. Current state: ${state}. Attempting to reconnect...`);
+      try {
+        await client.destroy();
+        await client.initialize();
+        state = await client.getState();
+        if (state !== 'CONNECTED') {
+          this.logger.error(`Client ${clientId} failed to reconnect. State: ${state}`);
+          throw new HttpException('Client could not reconnect to WhatsApp.', HttpStatus.UNAUTHORIZED);
+        }
+        this.logger.log(`✅ Client ${clientId} reconnected successfully`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to reconnect client ${clientId}: ${error.message}`);
+        throw new HttpException('Failed to reconnect client state.', HttpStatus.INTERNAL_SERVER_ERROR);
       }
     }
 
-    // Prevent overlapping sends
     if (this.sendingMessages.get(clientId)) {
-      throw new HttpException(
-        'Already sending messages from this account. Please wait.',
-        HttpStatus.TOO_MANY_REQUESTS
-      );
+      throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
     }
 
     this.sendingMessages.set(clientId, true);
-
     try {
       this.logger.log(`📤 Starting message resolution and sending for clientId: ${clientId}`);
       const resolvedContent = await this.resolveMessageContent(message, clientId);
       this.logger.debug(`📤 Resolved content to send: ${resolvedContent}`);
       const results: MessageResult[] = [];
-      const batchSize = 5; // Process in small batches
+      const batchSize = 5;
       const resolvedTo = await this.resolveRecipients(to, clientId);
       this.logger.log(`📤 Sending to ${resolvedTo.length} recipients with ${delayMs}ms delay`);
 
-      // Check if no valid recipients were resolved
-    if (resolvedTo.length === 0) {
-      this.logger.warn(`⚠️ No valid recipients found for clientId: ${clientId}, skipping send operation`);
-      return { message: 'No valid recipients found', results: [] };
-    }
-    
+      if (resolvedTo.length === 0) {
+        this.logger.warn(`⚠️ No valid recipients found for clientId: ${clientId}, skipping send operation`);
+        return { message: 'No valid recipients found', results: [] };
+      }
+
       for (let i = 0; i < resolvedTo.length; i += batchSize) {
         const batch = resolvedTo.slice(i, i + batchSize);
-
         const batchPromises = batch.map(async (recipient, batchIndex) => {
-          // Clean the recipient: remove leading '+' and validate
           let cleanedRecipient = recipient.startsWith('+') ? recipient.slice(1) : recipient;
-
-          // Remove any existing '@' suffix if present (to avoid duplicating it)
           cleanedRecipient = cleanedRecipient.split('@')[0];
-
-          // Validate: ensure the cleaned number contains only digits
           if (!/^\d+$/.test(cleanedRecipient)) {
             this.logger.error(`❌ Invalid phone number format: ${cleanedRecipient}`);
-            results.push({ 
-              recipient, 
-              status: 'failed', 
-              error: 'Invalid phone number format: must contain only digits' 
-            });
+            results.push({ recipient, status: 'failed', error: 'Invalid phone number format: must contain only digits' });
             return;
           }
-
           const chatId = `${cleanedRecipient}@c.us`;
           const globalIndex = i + batchIndex;
-
           try {
             await client.sendMessage(chatId, resolvedContent);
             results.push({ recipient, status: 'sent' });
             this.logger.debug(`✅ Sent to ${chatId} (${globalIndex + 1}/${to.length})`);
           } catch (error) {
             this.logger.error(`❌ Failed to send to ${chatId}: ${error.message}`);
-            results.push({ recipient, status: 'failed', error: error.message });
+            if (error.message.includes('WidFactory')) {
+              this.logger.warn(`⚠️ WidFactory error for ${chatId}. Attempting reinitialization...`);
+              await client.destroy();
+              await client.initialize();
+              await client.sendMessage(chatId, resolvedContent); // Retry after reinitialization
+              results.push({ recipient, status: 'sent' });
+            } else {
+              results.push({ recipient, status: 'failed', error: error.message });
+            }
           }
         });
-
         await Promise.allSettled(batchPromises);
-
-        // Apply delay between batches (except for last batch)
-        if (i + batchSize < to.length) {
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
+        if (i + batchSize < to.length) await new Promise(resolve => setTimeout(resolve, delayMs));
       }
-
       this.logger.log(`✅ Completed sending to all recipients`);
       return { message: 'Messages sent', results };
-
     } finally {
       this.sendingMessages.set(clientId, false);
     }
-}
- 
+  }
+
   private performCleanup(clientId: string) {
     this.clients.delete(clientId);
     this.sendingMessages.delete(clientId);
     this.clientReadyPromises.delete(clientId);
-
-    // Find and remove socket mapping
     for (const [socketId, mappedClientId] of this.socketClientMap.entries()) {
       if (mappedClientId === clientId) {
         this.socketClientMap.delete(socketId);
@@ -595,36 +498,25 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
   private cleanupExpiredQRCodes() {
     const now = Date.now();
     for (const [qr, cache] of this.qrCache.entries()) {
-      if (now - cache.timestamp > 300000) { // 5 minutes
-        this.qrCache.delete(qr);
-      }
+      if (now - cache.timestamp > 300000) this.qrCache.delete(qr);
     }
   }
 
   private cleanupStaleConnections() {
-    // Implementation for cleaning up stale connections
     this.logger.debug('🧹 Performing stale connection cleanup');
   }
-
-  // ... Rest of the existing methods with minor optimizations ...
 
   disconnectClient(socketClientId: string) {
     const clientId = this.socketClientMap.get(socketClientId);
     if (!clientId) return;
-
-    // Immediate cleanup for better responsiveness
     setImmediate(async () => {
       try {
         const client = this.clients.get(clientId);
-        if (client) {
-          await client.destroy();
-        }
-
+        if (client) await client.destroy();
         await this.accountModel.updateOne(
           { clientId },
-          { status: 'disconnected', disconnected_at: new Date() }
+          { status: 'disconnected', disconnected_at: new Date() },
         ).exec();
-
         this.performCleanup(clientId);
         this.logger.log(`🗑️ Cleaned up client ${clientId}`);
       } catch (error) {
@@ -633,6 +525,18 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
     });
   }
 
+  async deleteAccount(accountId: string) {
+    const account = await this.accountModel.findById(accountId).exec();
+    if (!account) throw new NotFoundException('Account not found');
+    const clientId = account.clientId;
+    if (clientId) {
+      await this.forceCleanupClient(clientId);
+    }
+    await this.accountModel.findByIdAndDelete(accountId).exec();
+    this.logger.log(`✅ Account ${accountId} and associated client deleted successfully`);
+    return { message: 'Account deleted successfully' };
+  }
+  
   isClientReady(clientId: string): boolean {
     const client = this.clients.get(clientId);
     return client !== undefined && !this.sendingMessages.get(clientId);
@@ -656,79 +560,55 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
       this.logger.warn('📁 .wwebjs_auth directory not found');
       return;
     }
-
     const sessionFiles = fs.readdirSync(authDir).filter(file => file.startsWith('session-'));
     this.logger.log(`📂 Found ${sessionFiles.length} session files to load`);
-
-    // Load sessions in parallel with concurrency limit
     const concurrencyLimit = 3;
     const semaphore = Array(concurrencyLimit).fill(null).map(() => Promise.resolve());
-
     const loadPromises = sessionFiles.map(async (file, index) => {
-      // Wait for available slot
       const slot = index % concurrencyLimit;
       await semaphore[slot];
-
       const promise = this.loadSingleSession(file);
-      semaphore[slot] = promise.catch(() => { }); // Don't let failures block other slots
+      semaphore[slot] = promise.catch(() => {});
       return promise;
     });
-
     const results = await Promise.allSettled(loadPromises);
     const successful = results.filter(r => r.status === 'fulfilled').length;
-
     this.logger.log(`✅ Loaded ${successful}/${sessionFiles.length} sessions successfully`);
   }
 
   private async loadSingleSession(file: string): Promise<void> {
     const clientId = file.replace('session-', '');
     const sessionPath = path.join(process.cwd(), '.wwebjs_auth', file);
-
     try {
       if (!this.isValidSession(sessionPath)) {
         this.logger.warn(`⚠️ Invalid session ${clientId}, cleaning up`);
         await this.cleanupSession(sessionPath);
         return;
       }
-
       this.logger.debug(`🔄 Loading session: ${clientId}`);
-
       const client = new Client({
         authStrategy: new LocalAuth({ clientId }),
         puppeteer: this.puppeteerConfig,
       });
-
-      // Setup minimal handlers for loaded sessions
-      client.on('message', async (message) => {
-        setImmediate(() => this.handleIncomingMessage(message, clientId));
-      });
-
-      client.on('ready', () => {
-        this.logger.log(`✅ Loaded session ${clientId} is ready`);
-      });
-
+      client.on('message', async (message) => setImmediate(() => this.handleIncomingMessage(message, clientId)));
+      client.on('ready', () => this.logger.log(`✅ Loaded session ${clientId} is ready`));
       client.on('auth_failure', async () => {
         this.logger.error(`🚫 Loaded session ${clientId} auth failed`);
         await this.cleanupSession(sessionPath);
         this.clients.delete(clientId);
       });
-
       client.on('disconnected', async (reason) => {
         this.logger.warn(`🔌 Loaded session ${clientId} disconnected: ${reason}`);
         await this.accountModel.updateOne(
           { clientId },
-          { status: 'disconnected', disconnected_at: new Date() }
+          { status: 'disconnected', disconnected_at: new Date() },
         ).exec();
         await this.cleanupSession(sessionPath);
         this.clients.delete(clientId);
       });
-
-      // Initialize and store
       await client.initialize();
       this.clients.set(clientId, client);
-
       this.logger.debug(`✅ Session ${clientId} loaded successfully`);
-
     } catch (error) {
       this.logger.error(`❌ Failed to load session ${clientId}: ${error.message}`);
       await this.cleanupSession(sessionPath);
@@ -737,58 +617,31 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
 
   private isValidSession(sessionPath: string): boolean {
     try {
-      if (!fs.existsSync(sessionPath)) {
-        return false;
-      }
-
+      if (!fs.existsSync(sessionPath)) return false;
       const defaultPath = path.join(sessionPath, 'Default');
-      if (!fs.existsSync(defaultPath)) {
-        return false;
-      }
-
-      // Check if marked for cleanup
+      if (!fs.existsSync(defaultPath)) return false;
       const cleanupFlag = path.join(sessionPath, '.cleanup_required');
-      if (fs.existsSync(cleanupFlag)) {
-        this.logger.warn(`Session marked for cleanup: ${sessionPath}`);
-        return false;
-      }
-
+      if (fs.existsSync(cleanupFlag)) return false;
       const stats = fs.statSync(defaultPath);
-      if (!stats.isDirectory()) {
-        return false;
-      }
-
+      if (!stats.isDirectory()) return false;
       const files = fs.readdirSync(defaultPath);
       const hasRequiredFiles = files.some(file =>
-        file.includes('Cookies') ||
-        file.includes('Local State') ||
-        file.includes('Preferences')
+        file.includes('Cookies') || file.includes('Local State') || file.includes('Preferences'),
       );
-
-      // Check for minimum file count and required files
-      const isValid = hasRequiredFiles && files.length > 2;
-
-      if (!isValid) {
-        this.logger.debug(`Invalid session detected: ${sessionPath} (${files.length} files)`);
-      }
-
-      return isValid;
+      return hasRequiredFiles && files.length > 2;
     } catch (error) {
       this.logger.error(`❌ Session validation error: ${error.message}`);
       return false;
     }
   }
+
   private async cleanupMarkedSessions(): Promise<void> {
     try {
       const authDir = path.join(process.cwd(), '.wwebjs_auth');
-      if (!fs.existsSync(authDir)) {
-        return;
-      }
-
+      if (!fs.existsSync(authDir)) return;
       const sessionDirs = fs.readdirSync(authDir)
         .filter(dir => dir.startsWith('session-'))
         .map(dir => path.join(authDir, dir));
-
       for (const sessionPath of sessionDirs) {
         const flagFile = path.join(sessionPath, '.cleanup_required');
         if (fs.existsSync(flagFile)) {
@@ -807,92 +660,51 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
         this.logger.debug(`📁 Session path doesn't exist: ${sessionPath}`);
         return;
       }
-
       this.logger.debug(`🧹 Starting cleanup of session: ${sessionPath}`);
-
-      // Force remove with retry logic
       await this.forceRemoveDirectory(sessionPath, 3);
-
       this.logger.debug(`✅ Successfully cleaned up session: ${sessionPath}`);
     } catch (error) {
       this.logger.error(`❌ Session cleanup failed: ${error.message}`);
-
-      // Try alternative cleanup methods
       await this.alternativeCleanup(sessionPath);
     }
   }
+
   private async forceRemoveDirectory(dirPath: string, retries: number = 3): Promise<void> {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        // Method 1: Use fs.rm with force and recursive (Node.js 14.14+)
         if (fs.promises.rm) {
-          await fs.promises.rm(dirPath, {
-            recursive: true,
-            force: true,
-            maxRetries: 3,
-            retryDelay: 100
-          });
+          await fs.promises.rm(dirPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
           return;
         }
-
-        // Method 2: Fallback to rmdir with recursive
         await fs.promises.rmdir(dirPath, { recursive: true });
         return;
-
       } catch (error) {
         this.logger.warn(`🔄 Cleanup attempt ${attempt}/${retries} failed: ${error.message}`);
-
-        if (attempt === retries) {
-          throw error;
-        }
-
-        // Wait before retry
+        if (attempt === retries) throw error;
         await new Promise(resolve => setTimeout(resolve, 500 * attempt));
       }
     }
   }
+
   private async alternativeCleanup(sessionPath: string): Promise<void> {
     try {
       this.logger.warn(`🔧 Attempting alternative cleanup for: ${sessionPath}`);
-
-      // First, try to unlock files by changing permissions
-      try {
-        await this.unlockDirectory(sessionPath);
-      } catch (permError) {
-        this.logger.debug(`Permission change failed: ${permError.message}`);
-      }
-
-      // Method 1: Manual recursive deletion
+      try { await this.unlockDirectory(sessionPath); } catch {}
       await this.recursiveDelete(sessionPath);
-
     } catch (error) {
       this.logger.error(`💥 Alternative cleanup also failed: ${error.message}`);
-
-      // Last resort: Use system command
       await this.systemCleanup(sessionPath);
     }
   }
+
   private async recursiveDelete(dirPath: string): Promise<void> {
-    if (!fs.existsSync(dirPath)) {
-      return;
-    }
-
+    if (!fs.existsSync(dirPath)) return;
     const stats = await fs.promises.lstat(dirPath);
-
     if (stats.isDirectory()) {
       const entries = await fs.promises.readdir(dirPath);
-
-      // Delete all contents first
-      await Promise.all(
-        entries.map(entry =>
-          this.recursiveDelete(path.join(dirPath, entry))
-        )
-      );
-
-      // Then delete the directory itself
+      await Promise.all(entries.map(entry => this.recursiveDelete(path.join(dirPath, entry))));
       await fs.promises.rmdir(dirPath);
     } else {
-      // Delete file
       await fs.promises.unlink(dirPath);
     }
   }
@@ -901,40 +713,27 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
-
     try {
-      // Change permissions to allow deletion (Linux/Unix)
       await execAsync(`chmod -R 755 "${dirPath}"`);
       this.logger.debug(`🔓 Changed permissions for: ${dirPath}`);
-    } catch (error) {
-      // Ignore permission errors on systems where this doesn't work
-      this.logger.debug(`Permission change not supported: ${error.message}`);
-    }
+    } catch {}
   }
+
   private async systemCleanup(sessionPath: string): Promise<void> {
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
-
     try {
       this.logger.warn(`🔨 Using system command to cleanup: ${sessionPath}`);
-
-      // Use rm -rf on Unix systems
-      if (process.platform !== 'win32') {
-        await execAsync(`rm -rf "${sessionPath}"`);
-      } else {
-        // Use rmdir /s on Windows
-        await execAsync(`rmdir /s /q "${sessionPath}"`);
-      }
-
+      if (process.platform !== 'win32') await execAsync(`rm -rf "${sessionPath}"`);
+      else await execAsync(`rmdir /s /q "${sessionPath}"`);
       this.logger.log(`✅ System cleanup successful: ${sessionPath}`);
     } catch (error) {
       this.logger.error(`💀 System cleanup failed: ${error.message}`);
-
-      // Mark for manual cleanup
       this.markForManualCleanup(sessionPath);
     }
   }
+
   private markForManualCleanup(sessionPath: string): void {
     try {
       const flagFile = path.join(sessionPath, '.cleanup_required');
@@ -945,23 +744,15 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
     }
   }
 
-
-  /**
-   * Get detailed client information
-   */
   async getClientInfo(clientId: string) {
     const client = this.clients.get(clientId);
-    if (!client) {
-      return null;
-    }
-
+    if (!client) return null;
     try {
       const info = client.info;
       const account = await this.accountModel.findOne(
         { clientId },
-        { name: 1, phone_number: 1, status: 1, created_at: 1 }
+        { name: 1, phone_number: 1, status: 1, created_at: 1 },
       ).lean().exec();
-
       return {
         clientId,
         isReady: this.isClientReady(clientId),
@@ -969,10 +760,10 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
         whatsappInfo: {
           phoneNumber: info?.wid?.user || 'Unknown',
           name: info?.pushname || 'Unknown',
-          platform: info?.platform || 'Unknown'
+          platform: info?.platform || 'Unknown',
         },
         accountInfo: account,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
     } catch (error) {
       this.logger.error(`❌ Error getting client info: ${error.message}`);
@@ -980,54 +771,62 @@ private async resolveMessageContent(message: string, clientId: string): Promise<
     }
   }
 
-  /**
-   * Health check for the service
-   */
+  
+
   getHealthStatus() {
     const totalClients = this.clients.size;
     const activeSending = Array.from(this.sendingMessages.values()).filter(Boolean).length;
     const qrCacheSize = this.qrCache.size;
-
     return {
       status: 'healthy',
-      metrics: {
-        totalClients,
-        activeSending,
-        qrCacheSize,
-        initializationQueue: this.initializationQueue.size,
-        socketMappings: this.socketClientMap.size
-      },
+      metrics: { totalClients, activeSending, qrCacheSize, initializationQueue: this.initializationQueue.size, socketMappings: this.socketClientMap.size },
       memory: {
         used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
       },
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
   }
 
-  /**
-   * Force cleanup of a specific client
-   */
   async forceCleanupClient(clientId: string) {
-    try {
-      const client = this.clients.get(clientId);
-      if (client) {
-        await client.destroy();
-      }
+  try {
+    const client = this.clients.get(clientId);
 
-      this.performCleanup(clientId);
-
-      // Update database
-      await this.accountModel.updateOne(
-        { clientId },
-        { status: 'force_disconnected', disconnected_at: new Date() }
-      ).exec();
-
-      this.logger.log(`🔨 Force cleaned up client: ${clientId}`);
-      return true;
-    } catch (error) {
-      this.logger.error(`❌ Force cleanup failed: ${error.message}`);
-      return false;
-    }
+    if (client) {
+  try {
+    await client.destroy();
+    this.logger.log(`🔌 Client destroyed: ${clientId}`);
+  } catch (err) {
+    this.logger.warn(`⚠️ Failed to destroy client: ${err.message}`);
   }
+
+  // Wait a short delay to allow Chrome to release file handles
+  await new Promise(res => setTimeout(res, 1500));
+}
+
+    // 🧹 Delete auth session folder
+    // const sessionPath = join(__dirname, '..', '..', '.wwebjs_auth', `session-${clientId}`);
+    // try {
+    //   rmSync(sessionPath, { recursive: true, force: true });
+    //   this.logger.log(`🗑️ Deleted session folder for client: ${clientId}`);
+    // } catch (fsErr) {
+    //   this.logger.warn(`⚠️ Failed to delete session folder for client ${clientId}: ${fsErr.message}`);
+    // }
+
+    // Mark account as force-disconnected in DB
+    await this.accountModel.updateOne(
+      { clientId },
+      { status: 'force_disconnected', disconnected_at: new Date() },
+    ).exec();
+
+    this.performCleanup(clientId);
+
+    this.logger.log(`🔨 Force cleaned up client: ${clientId}`);
+    return true;
+  } catch (error) {
+    this.logger.error(`❌ Force cleanup failed: ${error.message}`);
+    return false;
+  }
+}
+
 }

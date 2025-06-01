@@ -9,7 +9,6 @@ export class CreateScheduleDto {
 
   @IsArray({ message: 'Recipients must be an array of phone numbers' })
   @IsNotEmpty({ message: 'Recipients list is required and cannot be empty' })
-  @Validate(IsValidPhoneNumbers, { message: 'All phone numbers in recipients must be valid' })
   recipients: string[];
 
   @IsDate({ message: 'Scheduled time must be a valid date' })

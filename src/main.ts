@@ -24,6 +24,7 @@ async function bootstrap() {
       const allowedOrigins = [
         'http://localhost:3000', // Common frontend dev URL
         'http://localhost:4200',
+        'http://62.171.153.198:4082',
         "*", // Common for Angular
         process.env.FRONTEND_URL, // Production frontend URL
       ].filter(Boolean); // Remove null/undefined values

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, InternalServerErrorException, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -328,14 +328,22 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
   }
 
   async generateApiKey(userId: string): Promise<string> {
-    const apiKey = uuidv4(); // Generate a unique API key
-    const newApiKey = new this.apiKeyModel({
+    // Fetch an active accountId for the user (e.g., the first active account)
+    const accounts = await this.accountService.findAccountsByUser(userId);
+    if (!accounts || accounts.length === 0) {
+      throw new BadRequestException('No active accounts found for this user');
+    }
+    const accountId = accounts[0]._id.toString(); // Use the first account, or implement logic to select one
+
+    const apiKey = uuidv4();
+    await this.apiKeyModel.create({
       key: apiKey,
       userId,
+      accountId,
       isActive: true,
+      createdAt: new Date(),
     });
 
-    await newApiKey.save();
     return apiKey;
   }
 

@@ -20,11 +20,11 @@ export class ApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('Invalid API key');
     }
 
-    // Optionally validate userId if available (e.g., from JwtGuard)
-    const userId = request.user?.sub; // Assumes JwtGuard populates request.user
-    if (userId && apiKeyRecord.userId !== userId) {
-      throw new UnauthorizedException('API key does not match the authenticated user');
-    }
+    // Attach accountId and userId to request for downstream use
+    request.user = { 
+      userId: apiKeyRecord.userId,
+      accountId: apiKeyRecord.accountId 
+    };
 
     return true;
   }

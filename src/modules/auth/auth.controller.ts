@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Request, UseGuards, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, Request, UseGuards, BadRequestException, Logger } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from '../users/dto/create-users.dto';
@@ -13,11 +13,13 @@ import { WhatsAppService } from '../whatsapp/whatsapp.service';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger('Auth');
   constructor(
     private readonly authService: AuthService,
     private readonly otpService: OtpService,
     private readonly accountService : AccountsService,
     private readonly whatsappService : WhatsAppService
+    
   ) {}
 
   @Post('register')
@@ -49,47 +51,46 @@ export class AuthController {
     return this.authService.logout(userId);
   }
 
-  @Post('generate-api-key')
+ @Post('generate-api-key')
   @UseGuards(JwtGuard)
   async generateApiKey(@GetUserId() userId: string) {
     const apiKey = await this.authService.generateApiKey(userId);
     return { apiKey };
   }
 
-  @Post('send-otp')
-  @UseGuards(ApiKeyGuard, JwtGuard) // Both guards applied
-  async sendOtp(
-    @Body() body: { phone_number: string; otp: string }, // Removed userId and accountId from body
-    @GetUserId() userId: string,
-    @GetWhatsappAccountId() accountId: string,
-  ) {
-    const { phone_number, otp } = body;
+@Post('send-otp')
+@UseGuards(ApiKeyGuard) // Remove JwtGuard
+async sendOtp(
+  @Body() body: { phone_number: string; otp: string },
+  @Request() request: any, // Use Request to access user from ApiKeyGuard
+) {
+  const { phone_number, otp } = body;
+  const { accountId, userId } = request.user; // Extract from ApiKeyGuard
 
-    if (!phone_number || !otp) {
-      throw new BadRequestException('Phone number and OTP are required');
-    }
-
-    // Fetch clientId
-    const clientInfo: { clientId: string; status: string } = await this.accountService.findClientIdByAccountId(
-      accountId,
-      userId,
-    );
-    if (!clientInfo || !clientInfo.clientId) {
-      throw new BadRequestException('No WhatsApp account found for this user');
-    }
-
-    // Store OTP
-    await this.otpService.storeOtp(phone_number, otp);
-
-    // Send message using whatsappService
-    const message = `Welcome ! Your Code is ${otp}. It expires in 5 minutes.`;
-    try {
-      await this.whatsappService.sendMessage(clientInfo.clientId, [phone_number], message, 3000);
-      return { message: 'OTP sent successfully' };
-    } catch (error) {
-      console.error(`Failed to send OTP to ${phone_number}: ${error.message}`); // Enhanced logging
-      throw new BadRequestException(`Failed to send OTP: ${error.message}`);
-    }
+  if (!phone_number || !otp) {
+    throw new BadRequestException('Phone number and OTP are required');
   }
 
+  // Fetch clientId using accountId and userId
+  const clientInfo: { clientId: string; status: string } = await this.accountService.findClientIdByAccountId(
+    accountId,
+    userId,
+  );
+  if (!clientInfo || !clientInfo.clientId) {
+    throw new BadRequestException('No WhatsApp account found for this user');
+  }
+
+  // Store OTP
+  await this.otpService.storeOtp(phone_number, otp);
+
+  // Send message using whatsappService
+  const message = `Welcome! Your Code is ${otp}. It expires in 5 minutes.`;
+  try {
+    await this.whatsappService.sendMessage(clientInfo.clientId, [phone_number], message, 3000);
+    return { message: 'OTP sent successfully' };
+  } catch (error) {
+    this.logger.error(`Failed to send OTP to ${phone_number}: ${error.message}`);
+    throw new BadRequestException(`Failed to send OTP: ${error.message}`);
+  }
+}
 }

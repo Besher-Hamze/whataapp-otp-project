@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# environment variables
+.env
+.env.*.local
+
+# Vercel deployment settings
+.vercel/
+
+# Build output
+dist/
+
+# Authentication or sensitive config folder
+.wwebjs_auth/
+.wwebjs_cache

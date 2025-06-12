@@ -4,7 +4,7 @@ import { IsString } from 'class-validator'
 export class CreateRuleDto {
 
   @IsString()
-  keyword: string;
+  keywords: [string];
   @IsString()
   response: string;
 }

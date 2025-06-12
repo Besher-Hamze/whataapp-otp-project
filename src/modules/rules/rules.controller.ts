@@ -3,7 +3,7 @@ import { RulesService } from './rules.service';
 import { CreateRuleDto } from './dto/create-rule.dto';
 import { UpdateRuleDto } from './dto/update-rule.dto';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
-import { GetUserId } from 'src/common/decorators';
+import {GetWhatsappAccountId} from 'src/common/decorators';
 
 @UseGuards(JwtGuard)
 @Controller('rules')
@@ -13,46 +13,46 @@ export class RulesController {
   @Post()
   create(
     @Body() createRuleDto: CreateRuleDto,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.create(createRuleDto, userId);
+    return this.rulesService.create(createRuleDto, accountId);
   }
 
   @Get()
-  findAll(@GetUserId() userId: string) {
-    return this.rulesService.findAllRules(userId);
+  findAll(@GetWhatsappAccountId() accountId: string) {
+    return this.rulesService.findAllRules(accountId);
   }
 
   @Get(':id')
   findOne(
     @Param('id') id: string,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.findRuleById(id, userId);
+    return this.rulesService.findRuleById(id, accountId);
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string, 
     @Body() updateRuleDto: UpdateRuleDto,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.updateRule(id, updateRuleDto, userId);
+    return this.rulesService.updateRule(id, updateRuleDto, accountId);
   }
 
   @Delete(':id')
   remove(
     @Param('id') id: string,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.deleteRule(id, userId);
+    return this.rulesService.deleteRule(id, accountId);
   }
   
   @Get('match/:keyword')
   findByKeyword(
     @Param('keyword') keyword: string,
-    @GetUserId() userId: string
+    @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.findRuleByKeyword(keyword, userId);
+    return this.rulesService.findRuleByKeyword(keyword, accountId);
   }
 }

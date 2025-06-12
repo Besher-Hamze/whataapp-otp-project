@@ -11,11 +11,6 @@ export class CreateUserDto {
 
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\+\d{10,15}$/, { message: 'phone_number must start with + followed by 10 to 15 digits' })
-  phone_number: string;
-
-  @IsString()
-  @IsNotEmpty()
   @MinLength(6)
   password: string;
 }

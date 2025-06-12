@@ -11,6 +11,7 @@ import { GroupsModule } from '../groups/groups.module';
 import { ContactsModule } from '../contacts/contacts.module';
 import { TemplatesModule } from '../templates/templates.module';
 import { JwtModule } from '@nestjs/jwt';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -26,7 +27,8 @@ import { JwtModule } from '@nestjs/jwt';
     AccountsModule,
     GroupsModule,
     ContactsModule,
-    TemplatesModule
+    TemplatesModule,
+    AuthModule
   ],
   controllers: [WhatsAppController],
   providers: [WhatsAppGateway, WhatsAppService],

@@ -36,7 +36,6 @@ export class UsersService {
     const newUser = await this.userModel.create({
       username: createUserDto.username,
       email: createUserDto.email,
-      phone_number: createUserDto.phone_number,
       password: hashedPassword,
       created_at: new Date(),
       updated_at: new Date(),

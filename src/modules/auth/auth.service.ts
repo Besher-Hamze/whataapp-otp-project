@@ -347,4 +347,64 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
     return apiKey;
   }
 
+  async removeAccountFromTokens(userId: string, accountId: string): Promise<void> {
+  this.logger.log(`Removing account ${accountId} from tokens for userId: ${userId}`);
+
+  // Find all tokens associated with the deleted accountId
+  const tokens = await this.tokenModel.find({ userId, accountId }).exec();
+  if (!tokens || tokens.length === 0) {
+    this.logger.debug(`No tokens found for accountId: ${accountId}, userId: ${userId}`);
+    return;
+  }
+
+  // Fetch the user to generate new tokens
+  const user = await this.usersService.findUserById(userId);
+  if (!user) {
+    this.logger.warn(`User not found for userId: ${userId}, skipping token regeneration`);
+    return;
+  }
+
+  // Generate new payload without account_id
+  const newPayload = { sub: user._id, email: user.email };
+  const accessToken = this.jwtService.sign(newPayload, {
+    secret: process.env.JWT_SECRET,
+    expiresIn: '1d',
+  });
+  const refreshToken = this.jwtService.sign(newPayload, {
+    secret: process.env.JWT_REFRESH_SECRET,
+    expiresIn: '7d',
+  });
+
+  // Update or create new token records without accountId
+  try {
+    await Promise.all([
+      this.tokenModel.create({
+        userId: user._id,
+        token: accessToken,
+        type: 'access',
+        expiresAt: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
+      }),
+      this.tokenModel.create({
+        userId: user._id,
+        token: refreshToken,
+        type: 'refresh',
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }),
+    ]);
+
+    // Delete old tokens with the deleted accountId
+    await this.tokenModel.deleteMany({ userId, accountId });
+    this.logger.log(`Successfully regenerated tokens and removed account ${accountId} for userId: ${userId}`);
+  } catch (error) {
+    this.logger.error(`Failed to regenerate tokens for userId: ${userId}, accountId: ${accountId}: ${error.message}`);
+    throw new InternalServerErrorException('Failed to update tokens after account deletion');
+  }
+
+  // Invalidate API keys with the deleted accountId
+  const apiKeys = await this.apiKeyModel.find({ accountId, isActive: true }).exec();
+  if (apiKeys.length > 0) {
+    await this.apiKeyModel.updateMany({ accountId }, { isActive: false });
+    this.logger.log(`Invalidated ${apiKeys.length} API keys for accountId: ${accountId}`);
+  }
+}
 }

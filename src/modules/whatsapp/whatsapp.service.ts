@@ -23,6 +23,7 @@ import { ModuleRef } from '@nestjs/core';
 import { ContactsService } from '../contacts/contacts.service';
 import { GroupsService } from '../groups/groups.service';
 import { TemplatesService } from '../templates/templates.service';
+import { AuthService } from '../auth/auth.service';
 
 interface MessageResult {
   recipient: string;
@@ -112,6 +113,7 @@ export class WhatsAppService implements OnModuleInit {
     private readonly groupsService: GroupsService,
     private readonly contactsService: ContactsService,
     private templatesService: TemplatesService,
+    private readonly authService: AuthService,
   ) {}
 
   async onModuleInit() {
@@ -378,39 +380,43 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   if (!clientState) return;
 
   client.on('qr', (qr) => {
-    const qrStartTime = Date.now();
-    this.logger.log(`📱 QR received for ${clientId} - generating...`);
+  const qrStartTime = Date.now();
+  this.logger.log(`📱 QR received for ${clientId} - generating...`);
 
-    try {
-      const cached = this.qrCache.get(qr);
-      if (cached && Date.now() - cached.timestamp < this.QR_CACHE_DURATION) {
-        emit('qr', { clientId, qr: cached.dataUrl });
+  try {
+    const cached = this.qrCache.get(qr);
+    if (cached && Date.now() - cached.timestamp < this.QR_CACHE_DURATION) {
+      emit('qr', { clientId, qr: cached.dataUrl });
+      emit('loading_status', { clientId, loading: true }); // Emit loading true for cached QR
+      return;
+    }
+
+    QRCode.toDataURL(qr, {
+      errorCorrectionLevel: 'M',
+      type: 'image/png',
+      margin: 1,
+      color: { dark: '#000000', light: '#FFFFFF' },
+      width: 256,
+    }, (err, qrDataUrl) => {
+      if (err) {
+        this.logger.error(`❌ QR generation failed: ${err.message}`);
+        emit('initialization_failed', { clientId, error: err.message });
+        emit('loading_status', { clientId, loading: false }); // Emit loading false on failure
         return;
       }
 
-      QRCode.toDataURL(qr, {
-        errorCorrectionLevel: 'M',
-        type: 'image/png',
-        margin: 1,
-        color: { dark: '#000000', light: '#FFFFFF' },
-        width: 256,
-      }, (err, qrDataUrl) => {
-        if (err) {
-          this.logger.error(`❌ QR generation failed: ${err.message}`);
-          emit('initialization_failed', { clientId, error: err.message });
-          return;
-        }
-
-        this.qrCache.set(qr, { qr, dataUrl: qrDataUrl, timestamp: Date.now() });
-        emit('qr', { clientId, qr: qrDataUrl });
-        qrcodeTerminal.generate(qr, { small: true });
-        this.logger.log(`✅ QR generated and sent in ${Date.now() - qrStartTime}ms`);
-      });
-    } catch (error) {
-      this.logger.error(`❌ QR generation failed: ${error.message}`);
-      emit('initialization_failed', { clientId, error: error.message });
-    }
-  });
+      this.qrCache.set(qr, { qr, dataUrl: qrDataUrl, timestamp: Date.now() });
+      emit('qr', { clientId, qr: qrDataUrl });
+      emit('loading_status', { clientId, loading: true }); // Emit loading true after sending QR
+      qrcodeTerminal.generate(qr, { small: true });
+      this.logger.log(`✅ QR generated and sent in ${Date.now() - qrStartTime}ms`);
+    });
+  } catch (error) {
+    this.logger.error(`❌ QR generation failed: ${error.message}`);
+    emit('initialization_failed', { clientId, error: error.message });
+    emit('loading_status', { clientId, loading: false }); // Emit loading false on catch error
+  }
+});
 
   client.on('message', (message) => {
     setImmediate(() => this.handleIncomingMessage(message, clientId));
@@ -429,113 +435,120 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('ready', async () => {
-    try {
-      const userInfo = client.info;
-      const phoneNumber = userInfo?.wid?.user || 'Unknown';
-      const name = userInfo?.pushname || 'Unknown';
+  try {
+    const userInfo = client.info;
+    const phoneNumber = userInfo?.wid?.user || 'Unknown';
+    const name = userInfo?.pushname || 'Unknown';
 
-      this.logger.log(`📞 ${clientId} logged in as: ${name} (${phoneNumber})`);
+    this.logger.log(`📞 ${clientId} logged in as: ${name} (${phoneNumber})`);
 
-      // Check if an account with this phone number already exists
-      const existingAccount = await this.accountModel.findOne({
-        phone_number: phoneNumber,
-      }).lean().exec();
+    // Check if an account with this phone number already exists
+    const existingAccount = await this.accountModel.findOne({
+      phone_number: phoneNumber,
+    }).lean().exec();
 
-      if (existingAccount) {
-        // Check if the phone number is associated with a different user
-        if (existingAccount.user.toString() !== userId) {
-          this.logger.error(`🚫 Phone number ${phoneNumber} is already associated with user ${existingAccount.user}`);
-          emit('initialization_failed', {
-            clientId,
-            error: `Phone number ${phoneNumber} is already in use by another user.`,
-          });
-          await this.destroyClientSafely(client, clientId); // Destroy the client to prevent further use
-          return;
-        }
-
-        // If it's the same user, update clientId if changed
-        if (existingAccount.clientId !== clientId) {
-          await this.accountModel.updateOne(
-            { _id: existingAccount._id },
-            { clientId, status: 'active' }
-          ).exec();
-          this.logger.log(`🔄 Updated clientId for account ${existingAccount._id} to ${clientId}`);
-        }
-      } else {
-        // Create a new account with the single user
-        await this.accountModel.create({
-          name,
-          phone_number: phoneNumber,
-          user: userId, // Use single user field
+    if (existingAccount) {
+      // Check if the phone number is associated with a different user
+      if (existingAccount.user.toString() !== userId) {
+        this.logger.error(`🚫 Phone number ${phoneNumber} is already associated with user ${existingAccount.user}`);
+        emit('initialization_failed', {
           clientId,
-          status: 'active',
-          created_at: new Date(),
+          error: `Phone number ${phoneNumber} is already in use by another user.`,
         });
-        this.logger.log(`✅ Created new account for ${phoneNumber} with clientId ${clientId} and user ${userId}`);
+        await this.destroyClientSafely(client, clientId); // Destroy the client to prevent further use
+        return;
       }
 
-      clientState.isReady = true;
-      clientState.lastActivity = Date.now();
-      clientState.reconnectAttempts = 0;
-
-      emit('ready', {
-        phoneNumber,
+      // If it's the same user, update clientId if changed
+      if (existingAccount.clientId !== clientId) {
+        await this.accountModel.updateOne(
+          { _id: existingAccount._id },
+          { clientId, status: 'active' }
+        ).exec();
+        this.logger.log(`🔄 Updated clientId for account ${existingAccount._id} to ${clientId}`);
+      }
+    } else {
+      // Create a new account with the single user
+      await this.accountModel.create({
         name,
+        phone_number: phoneNumber,
+        user: userId, // Use single user field
         clientId,
         status: 'active',
-        message: 'WhatsApp client ready and account saved/updated.',
+        created_at: new Date(),
       });
-    } catch (error) {
-      this.logger.error(`❌ Ready handler error: ${error.message}`);
-      emit('initialization_failed', { clientId, error: error.message });
+      this.logger.log(`✅ Created new account for ${phoneNumber} with clientId ${clientId} and user ${userId}`);
     }
-  });
+
+    clientState.isReady = true;
+    clientState.lastActivity = Date.now();
+    clientState.reconnectAttempts = 0;
+
+    emit('ready', {
+      phoneNumber,
+      name,
+      clientId,
+      status: 'active',
+      message: 'WhatsApp client ready and account saved/updated.',
+    });
+    emit('loading_status', { clientId, loading: false }); // Emit loading false on ready
+  } catch (error) {
+    this.logger.error(`❌ Ready handler error: ${error.message}`);
+    emit('initialization_failed', { clientId, error: error.message });
+  }
+});
 
   client.on('disconnected', async (reason) => {
-    this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
+  this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
 
-    try {
-      const clientState = this.clientStates.get(clientId);
-      if (!clientState) return;
+  try {
+    const clientState = this.clientStates.get(clientId);
+    if (!clientState) return;
 
-      const isLogout = reason && (
-        reason.toLowerCase().includes('logout') ||
-        reason.toLowerCase().includes('conflict') ||
-        reason.toLowerCase().includes('logged out')
-      );
+    const isLogout = reason && (
+      reason.toLowerCase().includes('logout') ||
+      reason.toLowerCase().includes('conflict') ||
+      reason.toLowerCase().includes('logged out')
+    );
 
-      if (isLogout) {
-        this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
+    if (isLogout) {
+      this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
 
-        // Remove event listeners to prevent further activity
-        client.removeAllListeners();
+      // Remove event listeners to prevent further activity
+      client.removeAllListeners();
 
-        // Destroy the client to release resources
-        try {
-          await this.destroyClientSafely(clientState.client, clientId);
-          this.logger.log(`✅ Client ${clientId} destroyed successfully`);
-        } catch (destroyError) {
-          this.logger.error(`❌ Failed to destroy client ${clientId}: ${destroyError.message}`);
-        }
-
-        // Schedule cleanup with a delay to ensure file handles are released
-        await this.accountModel.updateOne(
-          { clientId },
-          { status: 'disconnected', disconnected_at: new Date(), clientId: null }
-        ).exec();
-        this.scheduleCleanup(clientId, `Logged out: ${reason}`, 5000); // 5-second delay
-      } else {
-        this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
-        emit('reconnecting', { clientId, reason });
-        const account = await this.accountModel.findOne({ clientId }).exec();
-        if (account) {
-          await this.handleReconnection(clientId, account._id.toString());
-        }
+      // Destroy the client to release resources
+      try {
+        await this.destroyClientSafely(clientState.client, clientId);
+        this.logger.log(`✅ Client ${clientId} destroyed successfully before account deletion`);
+      } catch (destroyError) {
+        this.logger.error(`❌ Failed to destroy client ${clientId} before deletion: ${destroyError.message}`);
       }
-    } catch (error) {
-      this.logger.error(`❌ Disconnect handler error for ${clientId}: ${error.message}`);
+
+      // Fetch the account to get accountId
+      const account = await this.accountModel.findOne({ clientId }).exec();
+      if (account) {
+        const accountId = account._id.toString();
+        this.logger.log(`🗑️ Initiating account deletion for account ${accountId}`);
+
+        // Call deleteAccount to remove the account and trigger cleanup
+        await this.deleteAccount(accountId);
+        this.logger.log(`✅ Account ${accountId} deleted successfully, requiring QR rescan`);
+      } else {
+        this.logger.warn(`⚠️ No account found for client ${clientId}, skipping deletion`);
+      }
+    } else {
+      this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
+      emit('reconnecting', { clientId, reason });
+      const account = await this.accountModel.findOne({ clientId }).exec();
+      if (account) {
+        await this.handleReconnection(clientId, account._id.toString());
+      }
     }
-  });
+  } catch (error) {
+    this.logger.error(`❌ Disconnect handler error for ${clientId}: ${error.message}`);
+  }
+});
 
   client.on('destroy', () => {
     this.logger.log(`💥 Client ${clientId} destroyed`);
@@ -785,18 +798,23 @@ private async cleanupClient(clientId: string, reason: string, forceCacheCleanup:
   }
 
   async deleteAccount(accountId: string) {
-    const account = await this.accountModel.findById(accountId).exec();
-    if (!account) {
-      throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
-    }
-
-    if (account.clientId) {
-      this.scheduleCleanup(account.clientId, `Account ${accountId} deleted`);
-    }
-
-    await this.accountModel.deleteOne({ _id: accountId }).exec();
-    return { message: 'Account deleted successfully' };
+  const account = await this.accountModel.findById(accountId).exec();
+  if (!account) {
+    throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
   }
+
+  const userId = account.user.toString(); // Extract userId from the account
+
+  if (account.clientId) {
+    this.scheduleCleanup(account.clientId, `Account ${accountId} deleted`);
+  }
+
+  // Remove accountId from tokens and invalidate API keys
+  await this.authService.removeAccountFromTokens(userId, accountId);
+
+  await this.accountModel.deleteOne({ _id: accountId }).exec();
+  return { message: 'Account deleted successfully' };
+}
 
   getHealthStatus() {
     return {
@@ -810,34 +828,26 @@ private async cleanupClient(clientId: string, reason: string, forceCacheCleanup:
     };
   }
 
-  private async handleIncomingMessage(message: Message, clientId: string) {
+private unreadMessages = new Map<string, { clientId: string, from: string }>();
+
+private async handleIncomingMessage(message: Message, clientId: string) {
   try {
     if (message.from.endsWith('@broadcast') || message.fromMe) return;
-    
+
     const account = await this.accountModel.findOne({ clientId }, { _id: 1, user: 1 }).lean().exec();
-    if (!account) {
-      this.logger.warn(`📱 No account found for client ${clientId}`);
-      return;
-    }
+    if (!account) return;
 
     const accountId = account._id.toString();
-    const sender = message.from.split('@')[0];
-    
-    this.logger.debug(`📨 Message from ${sender} to account ${accountId} (user: ${account.user})`);
-    
-    // Update last activity
-    const clientState = this.clientStates.get(clientId);
-    if (clientState) {
-      clientState.lastActivity = Date.now();
-    }
+    const sender = message.from.split('@')[0]; // Minimal safe access
 
-    // Process message handlers
+    // Store unread message without further interaction
+    this.unreadMessages.set(message.id.id, { clientId, from: sender });
+
     await Promise.allSettled(
-      this.messageHandlers.map(handler => 
-        handler(message, accountId).catch(err => 
-          this.logger.error(`Handler error: ${err.message}`)
-        )
-      )
+      this.messageHandlers.map(handler => {
+        // Pass minimal data to avoid reads
+        return handler({ from: sender, body: undefined }, accountId).catch(err => this.logger.error(`Handler error: ${err.message}`));
+      })
     );
   } catch (error) {
     this.logger.error(`❌ Message handling error: ${error.message}`);

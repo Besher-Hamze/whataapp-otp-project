@@ -85,8 +85,6 @@ export class WhatsAppGateway
     // Clean up socket data
     this.cleanupSocketData(client.id);
     
-    // // Notify WhatsApp service about socket disconnection
-    // this.whatsappService.disconnectClient(client.id);
   }
 
 @SubscribeMessage('init')

@@ -20,11 +20,8 @@ export class User extends Document {
   @Prop({ required: true })
   password: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true , unique: true })
   username: string;
-
-  @Prop({ required: true })
-  phone_number: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

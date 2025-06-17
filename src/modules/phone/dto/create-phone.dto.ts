@@ -7,9 +7,8 @@ export class CreatePhoneDto {
 
   @IsString()
   @IsNotEmpty({ message: 'Phone number is required' })
-  @Matches(/^\+\d{1,15}$/, {
-    message:
-      'Phone number must start with "+" followed by digits (e.g. +123456789)',
+  @Matches(/^\d{1,15}$/, {
+    message: 'Phone number must contain only digits (e.g. 123456789)',
   })
   readonly number: string;
 }

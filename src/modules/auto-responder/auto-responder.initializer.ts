@@ -12,32 +12,24 @@ export class AutoResponderInitializer implements OnModuleInit {
   ) {}
   
   async onModuleInit() {
-    this.logger.log('Initializing auto-responder...');
-    
-    // Register message handler with WhatsApp service
-    this.whatsAppService.registerMessageHandler(async (message, accountId) => {
-      try {
-        // Extract necessary info from message
-        const sender = message.from.split('@')[0]; // Extract phone number
-        const messageBody = message.body;
-        
-        // Process with auto-responder
-        const responded = await this.autoResponderService.handleIncomingMessage(
-          messageBody,
-          sender,
-          accountId
-        );
-        
-        if (responded) {
-          this.logger.log(`Auto-responded to message from ${sender}`);
-        } else {
-          this.logger.debug(`No auto-response for message from ${sender}`);
-        }
-      } catch (error) {
-        this.logger.error(`Error processing message for auto-response: ${error.message}`);
+  this.logger.log('Initializing auto-responder...');
+  
+  this.whatsAppService.registerMessageHandler(async (message, accountId) => {
+    try {
+      const sender = message.from.split('@')[0]; // Safe access
+      // Defer body access to autoresponder
+      const responded = await this.autoResponderService.handleIncomingMessage('', sender, accountId);
+      
+      if (responded) {
+        this.logger.log(`Auto-responded to message from ${sender}`);
+      } else {
+        this.logger.debug(`No auto-response for message from ${sender}`);
       }
-    });
-    
-    this.logger.log('Auto-responder initialized successfully');
-  }
+    } catch (error) {
+      this.logger.error(`Error processing message for auto-response: ${error.message}`);
+    }
+  });
+  
+  this.logger.log('Auto-responder initialized successfully');
+}
 }

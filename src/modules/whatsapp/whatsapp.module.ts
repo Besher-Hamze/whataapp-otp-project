@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppController } from './whatsapp.controller';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -11,6 +11,7 @@ import { GroupsModule } from '../groups/groups.module';
 import { ContactsModule } from '../contacts/contacts.module';
 import { TemplatesModule } from '../templates/templates.module';
 import { JwtModule } from '@nestjs/jwt';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -26,7 +27,8 @@ import { JwtModule } from '@nestjs/jwt';
     AccountsModule,
     GroupsModule,
     ContactsModule,
-    TemplatesModule
+    TemplatesModule,
+    forwardRef(() => AuthModule),
   ],
   controllers: [WhatsAppController],
   providers: [WhatsAppGateway, WhatsAppService],

@@ -828,34 +828,26 @@ private async cleanupClient(clientId: string, reason: string, forceCacheCleanup:
     };
   }
 
-  private async handleIncomingMessage(message: Message, clientId: string) {
+private unreadMessages = new Map<string, { clientId: string, from: string }>();
+
+private async handleIncomingMessage(message: Message, clientId: string) {
   try {
     if (message.from.endsWith('@broadcast') || message.fromMe) return;
-    
+
     const account = await this.accountModel.findOne({ clientId }, { _id: 1, user: 1 }).lean().exec();
-    if (!account) {
-      this.logger.warn(`📱 No account found for client ${clientId}`);
-      return;
-    }
+    if (!account) return;
 
     const accountId = account._id.toString();
-    const sender = message.from.split('@')[0];
-    
-    this.logger.debug(`📨 Message from ${sender} to account ${accountId} (user: ${account.user})`);
-    
-    // Update last activity
-    const clientState = this.clientStates.get(clientId);
-    if (clientState) {
-      clientState.lastActivity = Date.now();
-    }
+    const sender = message.from.split('@')[0]; // Minimal safe access
 
-    // Process message handlers
+    // Store unread message without further interaction
+    this.unreadMessages.set(message.id.id, { clientId, from: sender });
+
     await Promise.allSettled(
-      this.messageHandlers.map(handler => 
-        handler(message, accountId).catch(err => 
-          this.logger.error(`Handler error: ${err.message}`)
-        )
-      )
+      this.messageHandlers.map(handler => {
+        // Pass minimal data to avoid reads
+        return handler({ from: sender, body: undefined }, accountId).catch(err => this.logger.error(`Handler error: ${err.message}`));
+      })
     );
   } catch (error) {
     this.logger.error(`❌ Message handling error: ${error.message}`);

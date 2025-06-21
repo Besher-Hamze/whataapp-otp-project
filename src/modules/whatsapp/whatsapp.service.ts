@@ -387,7 +387,6 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
     const cached = this.qrCache.get(qr);
     if (cached && Date.now() - cached.timestamp < this.QR_CACHE_DURATION) {
       emit('qr', { clientId, qr: cached.dataUrl });
-      emit('loading_status', { clientId, loading: true }); // Emit loading true for cached QR
       return;
     }
 
@@ -401,7 +400,6 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
       if (err) {
         this.logger.error(`❌ QR generation failed: ${err.message}`);
         emit('initialization_failed', { clientId, error: err.message });
-        emit('loading_status', { clientId, loading: false }); // Emit loading false on failure
         return;
       }
 

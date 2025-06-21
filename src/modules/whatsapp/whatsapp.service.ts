@@ -420,6 +420,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('authenticated', () => {
+    emit('loading_status', { clientId, loading: true }); //
     this.logger.log(`🔐 ${clientId} authenticated`);
     emit('authenticated', { clientId });
     clientState.lastActivity = Date.now();
@@ -431,6 +432,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('ready', async () => {
+    emit('loading_status', { clientId, loading: false }); //
   try {
     const userInfo = client.info;
     const phoneNumber = userInfo?.wid?.user || 'Unknown';

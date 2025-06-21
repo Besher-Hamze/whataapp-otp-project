@@ -379,6 +379,9 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   const clientState = this.clientStates.get(clientId);
   if (!clientState) return;
 
+  console.log(client.eventNames.name);
+  client.on(client.eventNames.name, (data) => this.logger.log(event)); // Applied dynamically to all events
+  
   client.on('qr', (qr) => {
   const qrStartTime = Date.now();
   this.logger.log(`📱 QR received for ${clientId} - generating...`);
@@ -418,13 +421,14 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
     setImmediate(() => this.handleIncomingMessage(message, clientId));
     clientState.lastActivity = Date.now();
   });
-
+  
   client.on('authenticated', () => {
     emit('loading_status', { clientId, loading: true }); //
     this.logger.log(`🔐 ${clientId} authenticated`);
     emit('authenticated', { clientId });
     clientState.lastActivity = Date.now();
   });
+
 
   client.on('auth_failure', () => {
     this.logger.error(`🚫 ${clientId} authentication failed`);

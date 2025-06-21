@@ -405,14 +405,12 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
 
       this.qrCache.set(qr, { qr, dataUrl: qrDataUrl, timestamp: Date.now() });
       emit('qr', { clientId, qr: qrDataUrl });
-      emit('loading_status', { clientId, loading: true }); // Emit loading true after sending QR
       qrcodeTerminal.generate(qr, { small: true });
       this.logger.log(`✅ QR generated and sent in ${Date.now() - qrStartTime}ms`);
     });
   } catch (error) {
     this.logger.error(`❌ QR generation failed: ${error.message}`);
     emit('initialization_failed', { clientId, error: error.message });
-    emit('loading_status', { clientId, loading: false }); // Emit loading false on catch error
   }
 });
 
@@ -422,6 +420,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('authenticated', () => {
+    emit('loading_status', { clientId, loading: true }); //
     this.logger.log(`🔐 ${clientId} authenticated`);
     emit('authenticated', { clientId });
     clientState.lastActivity = Date.now();
@@ -433,6 +432,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('ready', async () => {
+    emit('loading_status', { clientId, loading: false }); //
   try {
     const userInfo = client.info;
     const phoneNumber = userInfo?.wid?.user || 'Unknown';

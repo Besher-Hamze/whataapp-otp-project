@@ -12,6 +12,19 @@ import { ContactsModule } from '../contacts/contacts.module';
 import { TemplatesModule } from '../templates/templates.module';
 import { JwtModule } from '@nestjs/jwt';
 import { AuthModule } from '../auth/auth.module';
+import { SessionManagerService } from './services/session-manager.service';
+import { EventHandlerService } from './services/event-handler.service';
+import { QRCodeService } from './services/qr-code.service';
+import { MessageHandlerService } from './services/message-handler.service';
+import { MessageSenderService } from './services/message-sender.service';
+import { RecipientResolverService } from './services/recipient-resolver.service';
+import { MessageContentResolverService } from './services/message-content-resolver.service';
+import { FileManagerService } from './services/file-manager.service';
+import { AccountService } from './services/account.service';
+import { PuppeteerConfigService } from './services/puppeteer-config.service';
+import { SessionRestorationService } from './services/session-restoration.service';
+import { CleanupService } from './services/cleanup.service';
+import { ReconnectionService } from './services/reconnection.service';
 
 @Module({
   imports: [
@@ -31,7 +44,22 @@ import { AuthModule } from '../auth/auth.module';
     forwardRef(() => AuthModule),
   ],
   controllers: [WhatsAppController],
-  providers: [WhatsAppGateway, WhatsAppService],
+  providers: [WhatsAppGateway,
+    WhatsAppService,
+    SessionManagerService,
+    EventHandlerService,
+    QRCodeService,
+    MessageHandlerService,
+    MessageSenderService,
+    RecipientResolverService,
+    MessageContentResolverService,
+    FileManagerService,
+    AccountService,
+    PuppeteerConfigService,
+    SessionRestorationService,
+    CleanupService,
+    ReconnectionService,
+  ],
   exports: [WhatsAppService]
 })
-export class WhatsappModule {}
+export class WhatsappModule { }

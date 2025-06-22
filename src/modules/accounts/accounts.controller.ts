@@ -10,7 +10,7 @@ import { JwtGuard } from 'src/common/guards/jwt.guard';
 @Controller('accounts')
 export class AccountsController {
   constructor(private readonly accountsService: AccountsService,
-  ) {}
+  ) { }
 
   @Post()
   create(@Body() createAccountDto: CreateAccountDto) {
@@ -22,15 +22,14 @@ export class AccountsController {
     return await this.accountsService.findAccountsByUser(userId);
   }
 
-  @Get()
-  findAll() {
-    return this.accountsService.findAllAccounts();
-  }
+  // @Get(':id')
+  // findOne(@Param('id') id: string) {
+  //   return this.accountsService.findAccountById(id);
+  // }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.accountsService.findAccountById(id);
-  }
+
+
+
 
   @Put(':id')
   update(@Param('id') id: string, @Body() updateAccountDto: UpdateAccountDto) {

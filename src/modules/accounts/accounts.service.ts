@@ -7,9 +7,9 @@ import { Model } from 'mongoose';
 
 @Injectable()
 export class AccountsService {
-  constructor(@InjectModel(Account.name) private accountModel: Model<AccountDocument>) {}
+  constructor(@InjectModel(Account.name) private accountModel: Model<AccountDocument>) { }
   private readonly logger = new Logger(AccountsService.name);
-  
+
   async create(createAccountDto: CreateAccountDto & { user: string }) {
     const existingAccount = await this.accountModel.findOne({
       $or: [{ phone_number: createAccountDto.phone_number }],
@@ -52,16 +52,16 @@ export class AccountsService {
 
   async findOne(id: string, userId: string): Promise<AccountDocument | null> {
     try {
-      const account = await this.accountModel.findOne({ 
+      const account = await this.accountModel.findOne({
         _id: id,
         user: userId
       }).exec();
-      
+
       if (!account) {
         this.logger.warn(`Account ${id} not found or does not belong to user ${userId}`);
         return null;
       }
-      
+
       return account;
     } catch (error) {
       this.logger.error(`Error finding account: ${error.message}`, error.stack);
@@ -103,7 +103,7 @@ export class AccountsService {
       throw new NotFoundException(`Account with ID "${id}" not found`);
     }
   }
-  
+
   async findAccountsByUser(userId: string): Promise<AccountDocument[]> {
     this.logger.log(`Starting findAccountsByUser for userId: ${userId}`);
     try {
@@ -122,7 +122,7 @@ export class AccountsService {
       throw error;
     }
   }
-  
+
   async findClientIdByAccountId(accountId: string, userId: string): Promise<{ clientId: string; status: string }> {
     try {
       const account = await this.accountModel.findOne({ _id: accountId, user: userId }).exec();

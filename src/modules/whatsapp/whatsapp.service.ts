@@ -423,7 +423,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
   
   client.on('authenticated', () => {
-    emit('loading_status', { clientId, loading: true }); //
+    emit('loading_status', { loading: true }); //
     this.logger.log(`🔐 ${clientId} authenticated`);
     emit('authenticated', { clientId });
     clientState.lastActivity = Date.now();
@@ -436,7 +436,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
   });
 
   client.on('ready', async () => {
-    emit('loading_status', { clientId, loading: false }); //
+    emit('loading_status', { loading: false }); //
   try {
     const userInfo = client.info;
     const phoneNumber = userInfo?.wid?.user || 'Unknown';
@@ -493,7 +493,7 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
       status: 'active',
       message: 'WhatsApp client ready and account saved/updated.',
     });
-    emit('loading_status', { clientId, loading: false }); // Emit loading false on ready
+    emit('loading_status', { loading: false }); // Emit loading false on ready
   } catch (error) {
     this.logger.error(`❌ Ready handler error: ${error.message}`);
     emit('initialization_failed', { clientId, error: error.message });
@@ -502,7 +502,6 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
 
   client.on('disconnected', async (reason) => {
   this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
-
   try {
     const clientState = this.clientStates.get(clientId);
     if (!clientState) return;
@@ -515,29 +514,18 @@ private setupClientEventHandlers(client: Client, clientId: string, emit: (event:
 
     if (isLogout) {
       this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
-
-      // Remove event listeners to prevent further activity
       client.removeAllListeners();
-
-      // Destroy the client to release resources
       try {
         await this.destroyClientSafely(clientState.client, clientId);
-        this.logger.log(`✅ Client ${clientId} destroyed successfully before account deletion`);
+        this.logger.log(`✅ Client ${clientId} destroyed successfully`);
+        const account = await this.accountModel.findOne({ clientId }).exec();
+        if (account) {
+          const accountId = account._id.toString();
+          await this.deleteAccountOnLogout(accountId); // New method for logout
+          this.logger.log(`✅ Account ${accountId} deleted on logout`);
+        }
       } catch (destroyError) {
         this.logger.error(`❌ Failed to destroy client ${clientId} before deletion: ${destroyError.message}`);
-      }
-
-      // Fetch the account to get accountId
-      const account = await this.accountModel.findOne({ clientId }).exec();
-      if (account) {
-        const accountId = account._id.toString();
-        this.logger.log(`🗑️ Initiating account deletion for account ${accountId}`);
-
-        // Call deleteAccount to remove the account and trigger cleanup
-        await this.deleteAccount(accountId);
-        this.logger.log(`✅ Account ${accountId} deleted successfully, requiring QR rescan`);
-      } else {
-        this.logger.warn(`⚠️ No account found for client ${clientId}, skipping deletion`);
       }
     } else {
       this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
@@ -641,6 +629,11 @@ private async scheduleCleanup(clientId: string, reason: string, delayMs: number 
       this.pendingCleanups.delete(clientId);
     }
   }, delayMs);
+}
+
+async deleteAccountOnLogout(accountId: string) {
+  await this.accountModel.deleteOne({ _id: accountId }).exec();
+  this.logger.log(`✅ Account ${accountId} deleted on logout`);
 }
 
 private async cleanupClient(clientId: string, reason: string, forceCacheCleanup: boolean = false) {

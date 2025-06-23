@@ -5,6 +5,11 @@ import { QRCodeService } from './qr-code.service';
 import { MessageHandlerService } from './message-handler.service';
 import { SessionManagerService } from './session-manager.service';
 import { AccountService } from './account.service';
+import { CleanupService } from './cleanup.service';
+import { ReconnectionService } from './reconnection.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Account, AccountDocument } from 'src/modules/accounts/schema/account.schema';
 
 @Injectable()
 export class EventHandlerService {
@@ -12,9 +17,13 @@ export class EventHandlerService {
 
     constructor(
         private readonly qrCodeService: QRCodeService,
+        @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
         private readonly messageHandler: MessageHandlerService,
         private readonly sessionManager: SessionManagerService,
         private readonly accountService: AccountService,
+        private readonly cleanupService: CleanupService, // New
+        private readonly reconnectionService: ReconnectionService
+
     ) { }
 
     setupEventHandlers(
@@ -140,23 +149,27 @@ export class EventHandlerService {
         });
     }
 
-    private async handleClientDisconnected(
-        client: Client,
-        clientId: string,
-        reason: string,
-        emit: (event: string, data: any) => void
-    ): Promise<void> {
-        this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
+private async handleClientDisconnected(
+    client: Client,
+    clientId: string,
+    reason: string,
+    emit: (event: string, data: any) => void
+): Promise<void> {
+    this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
 
-        const isLogout = this.isLogoutReason(reason);
+    const isLogout = this.isLogoutReason(reason);
 
-        if (isLogout) {
-            await this.accountService.handleLogout(clientId);
-        } else {
-            emit('reconnecting', { clientId, reason });
-            // Handle reconnection logic
+    if (isLogout) {
+        await this.accountService.handleLogout(clientId, client); // Pass client
+    } else {
+        this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
+        emit('reconnecting', { clientId, reason });
+        const account = await this.accountModel.findOne({ clientId }).exec();
+        if (account) {
+            await this.reconnectionService.handleReconnection(clientId)
         }
     }
+}
 
     private isLogoutReason(reason: string): boolean {
         return (

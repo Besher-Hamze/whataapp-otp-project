@@ -4,6 +4,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
 import { AuthService } from '../../auth/auth.service';
+import { CleanupService } from './cleanup.service';
+import { SessionManagerService } from './session-manager.service';
+import { Client } from 'whatsapp-web.js';
 
 @Injectable()
 export class AccountService {
@@ -12,6 +15,8 @@ export class AccountService {
     constructor(
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
         private readonly authService: AuthService,
+        private readonly cleanupService: CleanupService, // Injected
+        private readonly sessionManager: SessionManagerService
     ) { }
 
     async handleAccountReady(
@@ -47,11 +52,28 @@ export class AccountService {
         }
     }
 
-    async handleLogout(clientId: string): Promise<void> {
-        const account = await this.accountModel.findOne({ clientId }).exec();
-        if (account) {
-            const accountId = account._id.toString();
-            await this.deleteAccountOnLogout(accountId);
+    async handleLogout(clientId: string, client: Client): Promise<void> { // Add client parameter
+        const clientState = this.sessionManager.getClientState(clientId);
+        if (!clientState || !clientState.client) {
+            this.logger.warn(`Client state or client for ${clientId} not found during logout`);
+            return;
+        }
+
+        this.logger.log(`🔒 ${clientId} detected as logged out`);
+        client.removeAllListeners(); // Prevent further events
+
+        try {
+            await this.cleanupService.cleanupClient(clientId, 'Logout', true); // Destroy client and clean files/cache
+            this.logger.log(`✅ Client ${clientId} destroyed and cleaned up`);
+
+            const account = await this.accountModel.findOne({ clientId }).exec();
+            if (account) {
+                const accountId = account._id.toString();
+                await this.deleteAccountOnLogout(accountId);
+                this.logger.log(`✅ Account ${accountId} deleted on logout`);
+            }
+        } catch (error) {
+            this.logger.error(`❌ Error during logout for ${clientId}: ${error.message}`);
         }
     }
 

@@ -82,9 +82,6 @@ export class WhatsAppGateway
     this.connectionStats.total--;
     this.logger.debug(`📱 Client disconnected: ${client.id}`);
     
-    // // Clean up socket data
-    // this.cleanupSocketData(client.id);
-    
   }
 
 @SubscribeMessage('init')

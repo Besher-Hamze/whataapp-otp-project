@@ -150,26 +150,27 @@ export class EventHandlerService {
     }
 
 private async handleClientDisconnected(
-    client: Client,
-    clientId: string,
-    reason: string,
-    emit: (event: string, data: any) => void
-): Promise<void> {
-    this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
+        client: Client,
+        clientId: string,
+        reason: string,
+        emit: (event: string, data: any) => void
+    ): Promise<void> {
+        this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
 
-    const isLogout = this.isLogoutReason(reason);
+        const isLogout = this.isLogoutReason(reason);
 
-    if (isLogout) {
-        await this.accountService.handleLogout(clientId, client); // Pass client
-    } else {
-        this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
-        emit('reconnecting', { clientId, reason });
-        const account = await this.accountModel.findOne({ clientId }).exec();
-        if (account) {
-            await this.reconnectionService.handleReconnection(clientId)
+        if (isLogout) {
+            this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
+            await this.accountService.handleLogout(clientId, client);
+        } else {
+            this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
+            emit('reconnecting', { clientId, reason });
+            const account = await this.accountModel.findOne({ clientId }).exec();
+            if (account) {
+                await this.reconnectionService.handleReconnection(clientId);
+            }
         }
     }
-}
 
     private isLogoutReason(reason: string): boolean {
         return (

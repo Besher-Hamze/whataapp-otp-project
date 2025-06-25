@@ -86,10 +86,16 @@ export class AccountService {
         }
 
         this.logger.log(`🔒 ${clientId} detected as logged out`);
-        client.removeAllListeners(); // Prevent further events
-
+        
         try {
-            await this.cleanupService.cleanupClient(clientId, 'Logout', true); // Destroy client and clean files/cache
+            // Remove all listeners immediately to prevent any further events
+            client.removeAllListeners();
+            
+            // Give time for any pending operations to complete
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Use cleanup service for proper browser and file cleanup
+            await this.cleanupService.cleanupClient(clientId, 'Logout', true); // Force cleanup
             this.logger.log(`✅ Client ${clientId} destroyed and cleaned up`);
 
             const account = await this.accountModel.findOne({ clientId }).exec();
@@ -100,6 +106,7 @@ export class AccountService {
             }
         } catch (error) {
             this.logger.error(`❌ Error during logout for ${clientId}: ${error.message}`);
+            // Don't throw here, as logout cleanup should be best-effort
         }
     }
 

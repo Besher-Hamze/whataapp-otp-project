@@ -25,6 +25,7 @@ import { PuppeteerConfigService } from './services/puppeteer-config.service';
 import { SessionRestorationService } from './services/session-restoration.service';
 import { CleanupService } from './services/cleanup.service';
 import { ReconnectionService } from './services/reconnection.service';
+import { ProtocolErrorHandlerService } from './services/protocol-error-handler.service';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { ReconnectionService } from './services/reconnection.service';
     SessionRestorationService,
     CleanupService,
     ReconnectionService,
+    ProtocolErrorHandlerService,
   ],
   exports: [WhatsAppService]
 })

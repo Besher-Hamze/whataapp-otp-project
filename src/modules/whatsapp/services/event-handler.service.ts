@@ -32,11 +32,14 @@ export class EventHandlerService {
         emit: (event: string, data: any) => void,
         userId: string
     ): void {
+        // Add cleanup state tracking using an object for proper reference passing
+        const sessionState = { isHandlingLogout: false, isCleaningUp: false };
+        
         this.setupQRHandler(client, clientId, emit);
-        this.setupMessageHandler(client, clientId);
-        this.setupAuthHandlers(client, clientId, emit);
-        this.setupConnectionHandlers(client, clientId, emit, userId);
-        this.setupErrorHandlers(client, clientId, emit);
+        this.setupMessageHandler(client, clientId, sessionState);
+        this.setupAuthHandlers(client, clientId, emit, sessionState);
+        this.setupConnectionHandlers(client, clientId, emit, userId, sessionState);
+        this.setupErrorHandlers(client, clientId, emit, sessionState);
     }
 
     private setupQRHandler(client: Client, clientId: string, emit: (event: string, data: any) => void): void {
@@ -63,15 +66,19 @@ export class EventHandlerService {
         });
     }
 
-    private setupMessageHandler(client: Client, clientId: string): void {
+    private setupMessageHandler(client: Client, clientId: string, sessionState: { isHandlingLogout: boolean; isCleaningUp: boolean }): void {
         client.on('message', (message: Message) => {
+            if (sessionState.isHandlingLogout || sessionState.isCleaningUp) return;
+            
             setImmediate(() => this.messageHandler.handleIncomingMessage(message, clientId));
             this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
         });
     }
 
-    private setupAuthHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void): void {
+    private setupAuthHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void, sessionState: { isHandlingLogout: boolean; isCleaningUp: boolean }): void {
         client.on('authenticated', () => {
+            if (sessionState.isHandlingLogout || sessionState.isCleaningUp) return;
+            
             // Don't emit loading_status here anymore since we do it after QR scan
             this.logger.log(`🔐 ${clientId} authenticated`);
             emit('authenticated', { clientId });
@@ -90,9 +97,12 @@ export class EventHandlerService {
         client: Client,
         clientId: string,
         emit: (event: string, data: any) => void,
-        userId: string
+        userId: string,
+        sessionState: { isHandlingLogout: boolean; isCleaningUp: boolean }
     ): void {
         client.on('ready', async () => {
+            if (sessionState.isHandlingLogout || sessionState.isCleaningUp) return;
+            
             try {
                 await this.handleClientReady(client, clientId, emit, userId);
             } catch (error) {
@@ -104,14 +114,22 @@ export class EventHandlerService {
         });
 
         client.on('disconnected', async (reason) => {
-            await this.handleClientDisconnected(client, clientId, reason, emit);
+            await this.handleClientDisconnected(client, clientId, reason, emit, sessionState);
         });
     }
 
-    private setupErrorHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void): void {
+    private setupErrorHandlers(client: Client, clientId: string, emit: (event: string, data: any) => void, sessionState: { isHandlingLogout: boolean; isCleaningUp: boolean }): void {
         client.on('error', (error) => {
+            // If we're handling logout, ignore protocol errors as they're expected
+            if (sessionState.isHandlingLogout || sessionState.isCleaningUp) {
+                if (error.message.includes('Protocol error') && error.message.includes('Session closed')) {
+                    this.logger.debug(`Ignoring expected protocol error during logout for ${clientId}: ${error.message}`);
+                    return;
+                }
+            }
+            
             this.logger.error(`🚫 Client ${clientId} error: ${error.message}`);
-            if (this.isCriticalError(error)) {
+            if (this.isCriticalError(error) && !sessionState.isHandlingLogout) {
                 emit('error', { clientId, error: error.message });
                 // Stop loading on critical error
                 emit('loading_status', { loading: false });
@@ -161,7 +179,8 @@ private async handleClientDisconnected(
         client: Client,
         clientId: string,
         reason: string,
-        emit: (event: string, data: any) => void
+        emit: (event: string, data: any) => void,
+        sessionState?: { isHandlingLogout: boolean; isCleaningUp: boolean }
     ): Promise<void> {
         this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
 
@@ -172,9 +191,32 @@ private async handleClientDisconnected(
         const isLogout = this.isLogoutReason(reason);
 
         if (isLogout) {
+            // Set logout state if sessionState is available
+            if (sessionState) {
+                sessionState.isHandlingLogout = true;
+                sessionState.isCleaningUp = true;
+            }
+            
             this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
-            await this.accountService.handleLogout(clientId, client);
+            
+            // Remove all listeners immediately to prevent race conditions
+            try {
+                client.removeAllListeners();
+            } catch (error) {
+                this.logger.debug(`Could not remove listeners: ${error.message}`);
+            }
+            
             emit('logged_out', { clientId, reason });
+            
+            // Schedule cleanup after a short delay
+            setTimeout(async () => {
+                try {
+                    await this.accountService.handleLogout(clientId, client);
+                } catch (error) {
+                    this.logger.error(`❌ Account logout handling failed for ${clientId}: ${error.message}`);
+                    // Don't let logout errors crash the application
+                }
+            }, 1000);
         } else {
             this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
             emit('disconnected', { clientId, reason });

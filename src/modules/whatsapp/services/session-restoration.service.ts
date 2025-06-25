@@ -85,7 +85,13 @@ export class SessionRestorationService {
             this.logger.log(`✅ Session ${clientId} restored successfully`);
         } catch (error) {
             this.logger.error(`❌ Failed to restore session ${clientId}: ${error.message}`);
-            await this.fileManager.cleanupSessionFiles(clientId);
+            
+            try {
+                await this.fileManager.cleanupSessionFiles(clientId, false); // Non-force cleanup for failed restore
+            } catch (cleanupError) {
+                this.logger.warn(`Warning: Could not cleanup files for failed restore ${clientId}: ${cleanupError.message}`);
+            }
+            
             this.sessionManager.removeSession(clientId);
             
             // Mark account as disconnected
@@ -104,8 +110,13 @@ export class SessionRestorationService {
     }
 
     private setupRestoredSessionEvents(client: any, clientId: string): void {
+        let isCleaningUp = false;
+        let isLoggedOut = false;
+
         // Handle ready event
         client.on('ready', async () => {
+            if (isCleaningUp || isLoggedOut) return;
+            
             this.sessionManager.updateClientState(clientId, { 
                 isReady: true, 
                 lastActivity: Date.now(),
@@ -117,19 +128,42 @@ export class SessionRestorationService {
 
         // Handle disconnection
         client.on('disconnected', async (reason: string) => {
+            if (isCleaningUp) return;
+            
             this.logger.warn(`🔌 Restored session ${clientId} disconnected: ${reason}`);
             await this.sessionManager.markSessionAsDisconnected(clientId);
             this.sessionManager.updateClientState(clientId, { isReady: false });
 
             // Check if this is a logout
             if (this.isLogoutReason(reason)) {
+                isLoggedOut = true;
+                isCleaningUp = true;
+                
                 this.logger.log(`🔒 Session ${clientId} logged out, cleaning up...`);
-                await this.cleanupLoggedOutSession(clientId);
+                
+                // Immediately remove all listeners to prevent further events
+                try {
+                    client.removeAllListeners();
+                } catch (error) {
+                    this.logger.debug(`Could not remove listeners: ${error.message}`);
+                }
+                
+                // Schedule cleanup after a short delay to let any pending operations complete
+                setTimeout(async () => {
+                    try {
+                        await this.cleanupLoggedOutSession(clientId);
+                    } catch (error) {
+                        this.logger.error(`❌ Logout cleanup failed for ${clientId}: ${error.message}`);
+                        // Never let cleanup errors crash the application
+                    }
+                }, 1000);
             }
         });
 
         // Handle auth failure
         client.on('auth_failure', async () => {
+            if (isCleaningUp || isLoggedOut) return;
+            
             this.logger.error(`🚫 Restored session ${clientId} auth failed`);
             await this.sessionManager.markSessionAsDisconnected(clientId);
             this.sessionManager.removeSession(clientId);
@@ -137,16 +171,26 @@ export class SessionRestorationService {
 
         // Handle errors
         client.on('error', (error: Error) => {
+            if (isCleaningUp || isLoggedOut) return;
+            
+            // Ignore protocol errors that happen during logout
+            if (error.message.includes('Protocol error') && error.message.includes('Session closed')) {
+                this.logger.debug(`Ignoring protocol error during logout for ${clientId}: ${error.message}`);
+                return;
+            }
+            
             this.logger.error(`❌ Restored session ${clientId} error: ${error.message}`);
         });
 
         // Handle message events to update activity
         client.on('message', () => {
+            if (isCleaningUp || isLoggedOut) return;
             this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
         });
 
         // Handle authentication
         client.on('authenticated', () => {
+            if (isCleaningUp || isLoggedOut) return;
             this.logger.log(`🔐 Restored session ${clientId} authenticated`);
             this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
         });
@@ -162,8 +206,28 @@ export class SessionRestorationService {
 
     private async cleanupLoggedOutSession(clientId: string): Promise<void> {
         try {
-            // Clean up files
-            await this.fileManager.cleanupSessionFiles(clientId);
+            this.logger.log(`🧹 Starting logout cleanup for ${clientId}`);
+            
+            // First, try to get the client and properly destroy it
+            const clientState = this.sessionManager.getClientState(clientId);
+            if (clientState?.client) {
+                try {
+                    // Remove all listeners first to prevent race conditions
+                    clientState.client.removeAllListeners();
+                    
+                    // Give a moment for any pending operations to complete
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    // Destroy the client
+                    await clientState.client.destroy();
+                    this.logger.debug(`✅ Client destroyed for ${clientId}`);
+                } catch (destroyError) {
+                    this.logger.warn(`Warning during client destruction for ${clientId}: ${destroyError.message}`);
+                }
+            }
+            
+            // Clean up files with force flag for logout
+            await this.fileManager.cleanupSessionFiles(clientId, true);
             
             // Remove from session manager
             this.sessionManager.removeSession(clientId);
@@ -174,8 +238,11 @@ export class SessionRestorationService {
                 await this.accountModel.deleteOne({ _id: account._id }).exec();
                 this.logger.log(`✅ Account ${account._id} deleted after logout`);
             }
+            
+            this.logger.log(`✅ Logout cleanup completed for ${clientId}`);
         } catch (error) {
             this.logger.error(`❌ Error cleaning up logged out session ${clientId}: ${error.message}`);
+            // Don't throw here, as logout cleanup is best-effort
         }
     }
 
@@ -199,7 +266,13 @@ export class SessionRestorationService {
             return true;
         } catch (error) {
             this.logger.error(`❌ Failed to restore specific session ${clientId}: ${error.message}`);
-            await this.fileManager.cleanupSessionFiles(clientId);
+            
+            try {
+                await this.fileManager.cleanupSessionFiles(clientId, false); // Non-force cleanup for failed restore
+            } catch (cleanupError) {
+                this.logger.warn(`Warning: Could not cleanup files for failed specific restore ${clientId}: ${cleanupError.message}`);
+            }
+            
             this.sessionManager.removeSession(clientId);
             return false;
         }

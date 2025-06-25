@@ -7,6 +7,32 @@ import helmet from 'helmet';
 import * as compression from 'compression';
 import * as cookieParser from 'cookie-parser';
 
+// Global error handlers for WhatsApp protocol errors
+process.on('unhandledRejection', (reason, promise) => {
+  if (reason && typeof reason === 'object' && 'message' in reason) {
+    const message = (reason as Error).message;
+    if (message.includes('Protocol error') && 
+        (message.includes('Session closed') || message.includes('Target closed'))) {
+      console.debug(`[Global] Ignoring expected WhatsApp protocol error: ${message}`);
+      return; // Don't crash on expected protocol errors
+    }
+  }
+  
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // For other errors, log but don't crash the server
+});
+
+process.on('uncaughtException', (error) => {
+  if (error.message.includes('Protocol error') && 
+      (error.message.includes('Session closed') || error.message.includes('Target closed'))) {
+    console.debug(`[Global] Ignoring expected WhatsApp protocol error: ${error.message}`);
+    return; // Don't crash on expected protocol errors
+  }
+  
+  console.error('Uncaught Exception:', error);
+  // For critical errors, we might want to restart, but let's try to continue
+});
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug'], // Set logging levels

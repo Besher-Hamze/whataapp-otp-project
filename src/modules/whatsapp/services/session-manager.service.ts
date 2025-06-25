@@ -1,11 +1,11 @@
 // src/whatsapp/services/session-manager.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Client, LocalAuth } from 'whatsapp-web.js';
 import { ClientState } from '../interfaces/client-state.interface';
 import { PuppeteerConfigService } from './puppeteer-config.service';
 
 @Injectable()
-export class SessionManagerService {
+export class SessionManagerService implements OnModuleInit {
     private readonly logger = new Logger(SessionManagerService.name);
     private readonly clientStates = new Map<string, ClientState>();
     private readonly socketClientMap = new Map<string, string>();
@@ -14,7 +14,14 @@ export class SessionManagerService {
 
     constructor(private readonly puppeteerConfig: PuppeteerConfigService) { }
 
+
+    onModuleInit() {
+        // throw new Error('Method not implemented.');
+    }
+
     async createSession(clientId: string, userId: string): Promise<Client> {
+        console.log(clientId , "bla bla bal");
+        
         const client = new Client({
             authStrategy: new LocalAuth({ clientId }),
             puppeteer: this.puppeteerConfig.getConfig(),
@@ -23,7 +30,7 @@ export class SessionManagerService {
         const clientState: ClientState = {
             client,
             userId,
-            isReady: false,
+            isReady: true,
             isSending: false,
             lastActivity: Date.now(),
             reconnectAttempts: 0,

@@ -15,7 +15,7 @@ export class RulesController {
     @Body() createRuleDto: CreateRuleDto,
     @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.create(createRuleDto, accountId);
+    return this.rulesService.create([createRuleDto], accountId);
   }
 
   @Get()

@@ -92,12 +92,12 @@ export class WhatsAppController {
       }
 
       // Check if client is ready
-      if (!this.whatsappService.isClientReady(client.clientId)) {
-        throw new HttpException(
-          'WhatsApp client is not ready. Please ensure the session is connected.',
-          HttpStatus.SERVICE_UNAVAILABLE
-        );
-      }
+      // if (!this.whatsappService.isClientReady(client.clientId)) {
+      //   throw new HttpException(
+      //     'WhatsApp client is not ready. Please ensure the session is connected.',
+      //     HttpStatus.SERVICE_UNAVAILABLE
+      //   );
+      // }
 
       this.logger.log(`📤 Sending message via client ${client.clientId} with ${messageDelay}ms delay`);
 

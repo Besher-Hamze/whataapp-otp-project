@@ -70,9 +70,9 @@ export class MessageSenderService {
             throw new HttpException('Client state unavailable. Session may be disconnected.', HttpStatus.SERVICE_UNAVAILABLE);
         }
 
-        if (state !== 'CONNECTED') {
-            throw new HttpException('Client could not reconnect to WhatsApp.', HttpStatus.UNAUTHORIZED);
-        }
+        // if (state !== 'CONNECTED') {
+        //     throw new HttpException('Client could not reconnect to WhatsApp.', HttpStatus.UNAUTHORIZED);
+        // }
     }
 
     private async sendToRecipients(

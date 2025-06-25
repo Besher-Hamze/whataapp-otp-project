@@ -1,10 +1,12 @@
-import { Prop } from '@nestjs/mongoose';
-import { IsArray, IsString } from 'class-validator'
+import { IsArray, IsString, ArrayNotEmpty, IsNotEmpty } from 'class-validator';
 
 export class CreateRuleDto {
-
   @IsArray()
-  keywords: [string];
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  keywords: string[]; // Changed from [string] to string[] for proper TypeScript array
+
   @IsString()
+  @IsNotEmpty()
   response: string;
 }

@@ -7,7 +7,7 @@ import { Client } from 'whatsapp-web.js';
 export class CleanupService {
     private readonly logger = new Logger(CleanupService.name);
     private readonly pendingCleanups = new Set<string>();
-    private readonly SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+    private readonly SESSION_TIMEOUT =    100 *24*60 * 60 * 1000; // 30 minutes
 
     constructor(
         private readonly sessionManager: SessionManagerService,

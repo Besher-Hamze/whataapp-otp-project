@@ -34,8 +34,8 @@ export class PuppeteerConfigService {
                 '--max_old_space_size=4096',
             ],
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-            timeout: 60000,
-            protocolTimeout: 60000,
+            // timeout: 60000,
+            // protocolTimeout: 60000,
         };
     }
 }

@@ -47,7 +47,7 @@ export class FileManagerService {
             if (!stats.isDirectory()) return false;
 
             const files = fs.readdirSync(sessionPath);
-            return files.length > 0 && files.some(file => file === 'session.json');
+            return files.length > 0;
         } catch (error) {
             return false;
         }

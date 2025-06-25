@@ -2,46 +2,55 @@ import { ConflictException, Injectable, Logger, NotFoundException } from '@nestj
 import { CreateRuleDto } from './dto/create-rule.dto';
 import { UpdateRuleDto } from './dto/update-rule.dto';
 import { InjectModel } from '@nestjs/mongoose';
-import { Rule } from './schema/rules.schema';
+import { Rule, RuleDocument } from './schema/rules.schema';
 import { Model } from 'mongoose';
 
 @Injectable()
 export class RulesService {
   private readonly logger = new Logger(RulesService.name);
 
-  constructor(@InjectModel(Rule.name) private ruleModel: Model<Rule>) {}
+constructor(
+    @InjectModel(Rule.name)
+    private ruleModel: Model<RuleDocument>, // ✅ This is critical
+  ) {}
 
-  async create(createRuleDto: CreateRuleDto, accountId: string) {
-    // Check for duplicate keywords
-    const existingRule = await this.ruleModel.findOne({
-      $or: [
-        { keywords: { $in: createRuleDto.keywords }, user: accountId }, // Updated to keywords array
-      ],
-    });
 
-    if (existingRule) {
-      throw new ConflictException('One or more keywords already exist for this user');
+  async create(createRuleDtos: CreateRuleDto[], accountId: string) {
+    const newRules: Partial<Rule>[] = [];
+
+
+    for (const dto of createRuleDtos) {
+      const exists = await this.ruleModel.findOne({
+        keywords: { $in: dto.keywords },
+        account: accountId,
+      });
+
+      if (!exists) {
+        newRules.push({
+          ...dto,
+          account: accountId,
+        });
+      }
     }
 
-    const newRule = await this.ruleModel.create({
-      keywords: createRuleDto.keywords, // Updated to keywords array
-      response: createRuleDto.response,
-      user: accountId,
-      created_at: new Date(),
-      updated_at: new Date(),
-    });
+    if (newRules.length > 0) {
+      await this.ruleModel.insertMany(newRules as Rule[]); // ✅ TS2345 should now disappear
+    }
 
-    this.logger.log(`Created new rule with keywords "${createRuleDto.keywords.join(', ')}" for user ${accountId}`);
-    return newRule;
+    return {
+      insertedCount: newRules.length,
+      skippedCount: createRuleDtos.length - newRules.length,
+    };
   }
 
+
   async findAllRules(accountId: string): Promise<Rule[]> {
-    return this.ruleModel.find({ user: accountId }).exec();
+    return this.ruleModel.find({ account: accountId }).exec();
   }
 
   async findRuleById(id: string, accountId: string): Promise<Rule | null> {
     try {
-      const rule = await this.ruleModel.findOne({ _id: id, user: accountId }).exec();
+      const rule = await this.ruleModel.findOne({ _id: id, account: accountId }).exec();
       if (!rule) {
         throw new NotFoundException(`Rule with ID "${id}" not found`);
       }

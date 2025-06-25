@@ -3,9 +3,9 @@ import { Document, Schema as MongooseSchema } from 'mongoose';
 import { Account } from 'src/modules/accounts/schema/account.schema';
 
 @Schema({ timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } })
-export class Rule extends Document {
+export class Rule {
   @Prop({ type: [String], required: true })
-  keywords: [String];
+  keywords: string[];
 
   @Prop({ required: true })
   response: string;

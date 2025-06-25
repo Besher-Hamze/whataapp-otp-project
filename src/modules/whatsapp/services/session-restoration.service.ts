@@ -44,8 +44,8 @@ export class SessionRestorationService {
     private async restoreSession(clientId: string, userId: string) {
         try {
             const client = await this.sessionManager.createSession(clientId, userId);
-            this.eventHandler.setupEventHandlers(client, clientId, () => { }, userId);
-
+            // this.eventHandler.setupEventHandlers(client, clientId, () => { }, userId);
+            
             await client.initialize();
             this.logger.log(`✅ Restored session ${clientId} for user ${userId}`);
         } catch (error) {

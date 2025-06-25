@@ -33,7 +33,7 @@ export class MessageHandlerService {
 
             await Promise.allSettled(
                 this.messageHandlers.map(handler =>
-                    handler({ from: sender, body: undefined }, accountId)
+                    handler({ from: sender, body: message.body || '' }, accountId) // Pass message.body
                         .catch(err => this.logger.error(`Handler error: ${err.message}`))
                 )
             );

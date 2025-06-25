@@ -35,9 +35,29 @@ export class AccountService {
             if (existingAccount.clientId !== clientId) {
                 await this.accountModel.updateOne(
                     { _id: existingAccount._id },
-                    { clientId, status: 'active' }
+                    { 
+                        clientId, 
+                        status: 'ready',
+                        'sessionData.isAuthenticated': true,
+                        'sessionData.lastConnected': new Date(),
+                        'sessionData.authState': 'authenticated',
+                        'sessionData.sessionValid': true
+                    }
                 ).exec();
-                this.logger.log(`🔄 Updated clientId for account ${existingAccount._id} to ${clientId}`);
+                this.logger.log(`🔄 Updated account ${existingAccount._id} with new clientId ${clientId}`);
+            } else {
+                // Update session data for existing account with same clientId
+                await this.accountModel.updateOne(
+                    { _id: existingAccount._id },
+                    { 
+                        status: 'ready',
+                        'sessionData.isAuthenticated': true,
+                        'sessionData.lastConnected': new Date(),
+                        'sessionData.authState': 'authenticated',
+                        'sessionData.sessionValid': true
+                    }
+                ).exec();
+                this.logger.log(`✅ Updated session data for existing account ${existingAccount._id}`);
             }
         } else {
             await this.accountModel.create({
@@ -45,10 +65,16 @@ export class AccountService {
                 phone_number: phoneNumber,
                 user: userId,
                 clientId,
-                status: 'active',
+                status: 'ready',
+                sessionData: {
+                    isAuthenticated: true,
+                    lastConnected: new Date(),
+                    authState: 'authenticated',
+                    sessionValid: true
+                },
                 created_at: new Date(),
             });
-            this.logger.log(`✅ Created new account for ${phoneNumber}`);
+            this.logger.log(`✅ Created new account for ${phoneNumber} with clientId ${clientId}`);
         }
     }
 

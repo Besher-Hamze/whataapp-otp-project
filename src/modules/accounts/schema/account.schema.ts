@@ -7,6 +7,14 @@ export interface Account {
   name: string;
   phone_number: string;
   user: Types.ObjectId;
+  clientId?: string;
+  status: string;
+  sessionData?: {
+    isAuthenticated: boolean;
+    lastConnected: Date;
+    authState: string;
+    sessionValid: boolean;
+  };
 }
 
 export type AccountDocument = Account & Document;
@@ -25,8 +33,29 @@ export class Account {
   @Prop({ required: false })
   clientId?: string;
 
-  @Prop({ required: true, enum: ['active', 'disconnected'], default: 'active' })
+  @Prop({ required: true, enum: ['active', 'disconnected', 'authenticating', 'ready'], default: 'active' })
   status: string;
+
+  @Prop({ 
+    type: {
+      isAuthenticated: { type: Boolean, default: false },
+      lastConnected: { type: Date, default: Date.now },
+      authState: { type: String, default: 'pending' },
+      sessionValid: { type: Boolean, default: false }
+    },
+    default: () => ({
+      isAuthenticated: false,
+      lastConnected: new Date(),
+      authState: 'pending',
+      sessionValid: false
+    })
+  })
+  sessionData?: {
+    isAuthenticated: boolean;
+    lastConnected: Date;
+    authState: string;
+    sessionValid: boolean;
+  };
 }
 
 export const AccountSchema = SchemaFactory.createForClass(Account);

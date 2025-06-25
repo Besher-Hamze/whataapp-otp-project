@@ -140,13 +140,21 @@ export class EventHandlerService {
             reconnectAttempts: 0,
         });
 
+        // Save session state to database
+        await this.sessionManager.saveSessionState(clientId);
+
+        const isRestored = this.sessionManager.isRestoredSession(clientId);
+
         emit('ready', {
             phoneNumber,
             name,
             clientId,
             status: 'active',
-            message: 'WhatsApp client ready and account saved/updated.',
+            isRestored,
+            message: isRestored ? 'WhatsApp session restored successfully.' : 'WhatsApp client ready and account saved/updated.',
         });
+
+        this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
     }
 
 private async handleClientDisconnected(
@@ -157,17 +165,26 @@ private async handleClientDisconnected(
     ): Promise<void> {
         this.logger.warn(`🔌 ${clientId} disconnected: ${reason}`);
 
+        // Update session state immediately
+        this.sessionManager.updateClientState(clientId, { isReady: false });
+        await this.sessionManager.markSessionAsDisconnected(clientId);
+
         const isLogout = this.isLogoutReason(reason);
 
         if (isLogout) {
             this.logger.log(`🔒 ${clientId} detected as logged out due to: ${reason}`);
             await this.accountService.handleLogout(clientId, client);
+            emit('logged_out', { clientId, reason });
         } else {
             this.logger.log(`🔄 ${clientId} disconnected but not logged out, attempting reconnection`);
-            emit('reconnecting', { clientId, reason });
+            emit('disconnected', { clientId, reason });
+            
             const account = await this.accountModel.findOne({ clientId }).exec();
             if (account) {
+                emit('reconnecting', { clientId, reason });
                 await this.reconnectionService.handleReconnection(clientId);
+            } else {
+                this.logger.warn(`❌ No account found for ${clientId}, cannot reconnect`);
             }
         }
     }

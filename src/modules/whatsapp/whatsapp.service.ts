@@ -26,8 +26,21 @@ export class WhatsAppService implements OnModuleInit {
   ) { }
 
   async onModuleInit() {
-    setTimeout(() => this.sessionRestoration.loadClientsFromSessions(), 5000);
-    setInterval(() => this.cleanupService.cleanupInactiveSessions(), 600000); // Every 10 minutes
+    this.logger.log('🚀 WhatsApp Service initializing...');
+    
+    // Restore existing sessions after a delay to ensure all services are ready
+    setTimeout(async () => {
+      this.logger.log('🔄 Starting session restoration...');
+      await this.sessionRestoration.loadClientsFromSessions();
+      this.logger.log(`✅ Session restoration completed. Active sessions: ${this.getActiveSessionCount()}`);
+    }, 5000);
+    
+    // Cleanup inactive sessions every 10 minutes
+    setInterval(() => {
+      this.cleanupService.cleanupInactiveSessions();
+    }, 600000);
+    
+    this.logger.log('✅ WhatsApp Service initialized successfully');
   }
 
   async startSession(
@@ -38,12 +51,33 @@ export class WhatsAppService implements OnModuleInit {
   ) {
     this.logger.log(`🚀 Attempting to start session for userId: ${userId}, accountId: ${accountId || 'new'}`);
 
-    // Check for existing session
+    // Check for existing socket mapping
     if (this.sessionManager.getClientIdBySocket(socketClientId)) {
       const existingClientId = this.sessionManager.getClientIdBySocket(socketClientId)!;
       if (this.sessionManager.isClientReady(existingClientId)) {
         this.logger.log(`✅ Reusing existing session: ${existingClientId}`);
         return { clientId: existingClientId };
+      }
+    }
+
+    // Check for existing user sessions that can be reused
+    if (accountId) {
+      const existingSession = this.sessionManager.getClientState(accountId);
+      if (existingSession && existingSession.isReady) {
+        this.logger.log(`✅ Found existing ready session for account: ${accountId}`);
+        this.sessionManager.mapSocketToClient(socketClientId, accountId);
+        return { clientId: accountId };
+      }
+    }
+
+    // Check for any existing sessions for this user
+    const userSessions = this.sessionManager.getSessionsForUser(userId);
+    if (userSessions.length > 0 && !accountId) {
+      const readySession = userSessions.find(sessionId => this.sessionManager.isClientReady(sessionId));
+      if (readySession) {
+        this.logger.log(`✅ Found existing ready session for user: ${readySession}`);
+        this.sessionManager.mapSocketToClient(socketClientId, readySession);
+        return { clientId: readySession };
       }
     }
 
@@ -173,23 +207,48 @@ export class WhatsAppService implements OnModuleInit {
     const clientState = this.sessionManager.getClientState(clientId);
     if (!clientState) return null;
 
+    const sessionStatus = await this.sessionManager.getSessionStatus(clientId);
+    
     return {
       clientId,
       isReady: clientState.isReady,
       isSending: clientState.isSending,
       lastActivity: clientState.lastActivity,
       reconnectAttempts: clientState.reconnectAttempts,
+      isRestored: this.sessionManager.isRestoredSession(clientId),
+      sessionStatus
     };
+  }
+
+  async restoreSpecificSession(clientId: string, userId: string, emit?: (event: string, data: any) => void): Promise<boolean> {
+    this.logger.log(`🔄 Attempting to restore specific session: ${clientId}`);
+    return await this.sessionRestoration.restoreSpecificSession(clientId, userId, emit);
+  }
+
+  getRestoredSessions(): string[] {
+    return Array.from(this.sessionManager.getAllSessions().entries())
+      .filter(([clientId]) => this.sessionManager.isRestoredSession(clientId))
+      .map(([clientId]) => clientId);
   }
 
   getHealthStatus() {
     const allSessions = this.sessionManager.getAllSessions();
+    const readySessions = Array.from(allSessions.values()).filter(c => c.isReady);
+    const restoredSessions = this.getRestoredSessions();
+    
     return {
       status: 'healthy',
       metrics: {
-        totalClients: allSessions.size,
-        readyClients: Array.from(allSessions.values()).filter(c => c.isReady).length,
-        sendingClients: Array.from(allSessions.values()).filter(c => c.isSending).length,
+        totalSessions: allSessions.size,
+        readySessions: readySessions.length,
+        sendingSessions: Array.from(allSessions.values()).filter(c => c.isSending).length,
+        restoredSessions: restoredSessions.length,
+        activeSessions: this.sessionManager.getActiveSessionCount(),
+        totalSessionsCount: this.sessionManager.getTotalSessionCount()
+      },
+      sessions: {
+        restored: restoredSessions,
+        ready: readySessions.map((_, index) => Array.from(allSessions.keys())[index]).filter(id => this.sessionManager.isClientReady(id))
       },
       timestamp: Date.now(),
     };

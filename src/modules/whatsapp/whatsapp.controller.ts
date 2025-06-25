@@ -1,12 +1,12 @@
-import { 
-  Controller, 
-  Post, 
-  Body, 
-  Get, 
-  Param, 
-  BadRequestException, 
-  UseGuards, 
-  Query, 
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  BadRequestException,
+  UseGuards,
+  Query,
   Delete,
   HttpException,
   HttpStatus,
@@ -32,7 +32,7 @@ export class WhatsAppController {
     private readonly whatsappGateway: WhatsAppGateway,
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private readonly accountsService: AccountsService,
-  ) {}
+  ) { }
 
   @Get('start')
   async startSession() {
@@ -57,12 +57,12 @@ export class WhatsAppController {
     @GetUserId() userId: string,
     @GetWhatsappAccountId() accountId: string,
     @Query('delay') delay?: number,
-  )  {
+  ) {
     const startTime = Date.now();
-    
+
     try {
       this.logger.log(`📤 Message send request from user ${userId} for account ${accountId}`);
-      
+
       // Validate input
       if (!body.to || !Array.isArray(body.to) || body.to.length === 0) {
         throw new BadRequestException('Recipients (to) must be a non-empty array');
@@ -155,10 +155,10 @@ export class WhatsAppController {
   async getSessions(@GetUserId() userId: string) {
     try {
       const accounts = await this.whatsappService.getUserAccounts(userId);
-      let sessionInfo:any[] = [];
+      let sessionInfo: any[] = [];
 
       for (const account of accounts) {
-        const clientInfo = account.clientId 
+        const clientInfo = account.clientId
           ? await this.whatsappService.getClientInfo(account.clientId)
           : null;
 
@@ -194,7 +194,7 @@ export class WhatsAppController {
   @Get('session-count')
   getSessionCount(@GetUserId() userId: string) {
     try {
-      const healthStatus = this.whatsappService.getHealthStatus();
+      const healthStatus = this.whatsappService.getHealthStatus() as any;
       const gatewayStats = this.whatsappGateway.getConnectionStats();
 
       return {
@@ -281,7 +281,7 @@ export class WhatsAppController {
 
     } catch (error) {
       this.logger.error(`❌ Failed to delete account ${id}: ${error.message}`);
-      
+
       if (error instanceof BadRequestException) {
         throw error;
       }
@@ -337,7 +337,7 @@ export class WhatsAppController {
 
     } catch (error) {
       this.logger.error(`❌ Force cleanup failed for account ${id}: ${error.message}`);
-      
+
       if (error instanceof BadRequestException) {
         throw error;
       }
@@ -431,7 +431,7 @@ export class WhatsAppController {
 
     } catch (error) {
       this.logger.error(`❌ Failed to get account ${id}: ${error.message}`);
-      
+
       if (error instanceof BadRequestException) {
         throw error;
       }
@@ -480,6 +480,147 @@ export class WhatsAppController {
       this.logger.error(`❌ Broadcast failed: ${error.message}`);
       throw new HttpException(
         `Broadcast failed: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Post('restore-session/:clientId')
+  async restoreSession(
+    @Param('clientId') clientId: string,
+    @GetUserId() userId: string
+  ) {
+    try {
+      this.logger.log(`🔄 Session restoration request for clientId: ${clientId} by user: ${userId}`);
+
+      // Verify the client belongs to the user
+      const account = await this.accountModel.findOne({
+        clientId,
+        user: userId
+      }).exec();
+
+      if (!account) {
+        throw new BadRequestException('Session not found or does not belong to user');
+      }
+
+      // Check if session is already active
+      if (this.whatsappService.isClientReady(clientId)) {
+        return {
+          message: 'Session is already active',
+          clientId,
+          isReady: true,
+          timestamp: Date.now(),
+        };
+      }
+
+      // Attempt to restore the session
+      const success = await this.whatsappService.restoreSpecificSession(clientId, userId);
+
+      this.logger.log(`${success ? '✅' : '❌'} Session restoration ${success ? 'successful' : 'failed'} for ${clientId}`);
+
+      return {
+        success,
+        message: success ? 'Session restored successfully' : 'Failed to restore session',
+        clientId,
+        accountId: account._id,
+        timestamp: Date.now(),
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Session restoration failed for ${clientId}: ${error.message}`);
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new HttpException(
+        `Session restoration failed: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('restored-sessions')
+  async getRestoredSessions(@GetUserId() userId: string) {
+    try {
+      const restoredSessions = this.whatsappService.getRestoredSessions();
+      const userSessions: any = [];
+
+      for (const clientId of restoredSessions) {
+        const account = await this.accountModel.findOne({
+          clientId,
+          user: userId
+        }).lean().exec();
+
+        if (account) {
+          const clientInfo = await this.whatsappService.getClientInfo(clientId);
+          userSessions.push({
+            clientId,
+            accountId: account._id,
+            phoneNumber: account.phone_number,
+            name: account.name,
+            status: account.status,
+            clientInfo,
+            restoredAt: account.sessionData?.lastConnected,
+          });
+        }
+      }
+
+      return {
+        restoredSessions: userSessions,
+        total: userSessions.length,
+        active: userSessions.filter(s => s.clientInfo?.isReady).length,
+        timestamp: Date.now(),
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to get restored sessions for user ${userId}: ${error.message}`);
+      throw new HttpException(
+        'Failed to retrieve restored sessions',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('session-status/:clientId')
+  async getSessionStatus(
+    @Param('clientId') clientId: string,
+    @GetUserId() userId: string
+  ) {
+    try {
+      // Verify the client belongs to the user
+      const account = await this.accountModel.findOne({
+        clientId,
+        user: userId
+      }).lean().exec();
+
+      if (!account) {
+        throw new BadRequestException('Session not found or does not belong to user');
+      }
+
+      const clientInfo = await this.whatsappService.getClientInfo(clientId);
+      const isReady = this.whatsappService.isClientReady(clientId);
+
+      return {
+        clientId,
+        accountId: account._id,
+        phoneNumber: account.phone_number,
+        isReady,
+        clientInfo,
+        accountStatus: account.status,
+        sessionData: account.sessionData,
+        timestamp: Date.now(),
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to get session status for ${clientId}: ${error.message}`);
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new HttpException(
+        'Failed to get session status',
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }

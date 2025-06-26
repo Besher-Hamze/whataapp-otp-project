@@ -187,7 +187,7 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async deleteAccount(accountId: string) {
-    const account = await this.accountService.findAccountByClientId(accountId);
+    const account = await this.accountService.findAccountById(accountId);
     if (!account) {
       throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
     }

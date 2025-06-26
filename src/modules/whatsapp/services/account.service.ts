@@ -1,5 +1,5 @@
 // src/whatsapp/services/account.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
@@ -109,6 +109,20 @@ export class AccountService {
             // Don't throw here, as logout cleanup should be best-effort
         }
     }
+    async findAccountById(id: string): Promise<AccountDocument | null> {
+        try {
+          const account = await this.accountModel.findById(id).exec();
+          if (!account) {
+            throw new NotFoundException(`Account with ID "${id}" not found`);
+          }
+          return account;
+        } catch (error) {
+          if (error.name === 'CastError') {
+            throw new NotFoundException(`Invalid Account ID "${id}"`);
+          }
+          throw error;
+        }
+      }
 
     async deleteAccountOnLogout(accountId: string): Promise<void> {
         const account = await this.accountModel.findById(accountId).exec();

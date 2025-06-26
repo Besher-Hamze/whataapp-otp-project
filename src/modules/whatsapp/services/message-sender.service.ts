@@ -58,6 +58,56 @@ export class MessageSenderService {
         }
     }
 
+    async sendMessageExcel(
+        clientId: string,
+        data: { messages: { number: string; message: string }[] },
+        delayMs: number = 3000
+    ): Promise<{ message: string; results: MessageResult[] }> {
+        const clientState = this.sessionManager.getClientState(clientId);
+
+        if (!clientState?.client) {
+            throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
+        }
+
+        if (clientState.isSending) {
+            throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
+        }
+
+        await this.validateClientConnection(clientState, clientId);
+
+        this.sessionManager.updateClientState(clientId, {
+            isSending: true,
+            lastActivity: Date.now()
+        });
+
+        try {
+            const allResults: MessageResult[] = [];
+            for (const { number, message } of data.messages) {
+                try {
+                    const resolvedTo = await this.recipientResolver.resolveRecipients([number], clientId);
+                    if (resolvedTo.length === 0) {
+                        allResults.push({ recipient: number, status: 'failed', error: 'No valid recipient' });
+                        continue;
+                    }
+
+                    const resolvedContent = await this.contentResolver.resolveContent(message, clientId);
+                    const results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs);
+                    allResults.push(...results);
+                } catch (error) {
+                    allResults.push({ recipient: number, status: 'failed', error: error.message });
+                }
+            }
+
+            const successCount = allResults.filter(r => r.status === 'sent').length;
+            const failedCount = allResults.length - successCount;
+            const summaryMessage = `Bulk send completed: ${successCount} success, ${failedCount} failed`;
+            this.logger.log(`📊 ${summaryMessage}`);
+            return { message: summaryMessage, results: allResults };
+        } finally {
+            this.sessionManager.updateClientState(clientId, { isSending: false });
+        }
+    }
+    
     private async validateClientConnection(clientState: any, clientId: string): Promise<void> {
         if (!clientState.isReady) {
             throw new HttpException('WhatsApp client is not ready. Please wait for initialization.', HttpStatus.SERVICE_UNAVAILABLE);

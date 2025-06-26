@@ -21,6 +21,7 @@ import { JwtGuard } from 'src/common/guards/jwt.guard';
 import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
 import { NewMessageDto } from './dto/message.dto';
 import { AccountsService } from '../accounts/accounts.service';
+import { SendMessageExcelDto } from './dto/excel-message.dto';
 
 @UseGuards(JwtGuard)
 @Controller('whatsapp')
@@ -49,6 +50,109 @@ export class WhatsAppController {
       },
       timestamp: Date.now(),
     };
+  }
+
+ @Post('send-excel')
+  async sendExcel(
+    @Body() dto: SendMessageExcelDto,
+    @GetUserId() userId: string,
+    @GetWhatsappAccountId() accountId: string,
+    @Query('delay') delay?: number,
+  ) {
+    const startTime = Date.now();
+
+    try {
+      this.logger.log(`📤 Bulk message send request from user ${userId} for account ${accountId}`);
+
+      // Validate input
+      if (!dto.messages || !Array.isArray(dto.messages) || dto.messages.length === 0) {
+        throw new BadRequestException('Messages must be a non-empty array');
+      }
+
+      for (const item of dto.messages) {
+        if (!item.number || typeof item.number !== 'string') {
+          throw new BadRequestException('Each message must have a valid number');
+        }
+        if (!item.message || typeof item.message !== 'string') {
+          throw new BadRequestException('Each message must have valid content');
+        }
+      }
+
+      // Find client by account ID
+      const client = await this.accountsService.findClientIdByAccountId(accountId, userId);
+      if (!client) {
+        throw new BadRequestException('Account not found or does not belong to user');
+      }
+
+      // Validate delay parameter
+      let messageDelay = 5000; // Default 5 seconds
+      if (delay !== undefined) {
+        const parsedDelay = parseInt(delay.toString(), 10);
+        if (isNaN(parsedDelay)) {
+          throw new BadRequestException('Delay must be a valid number');
+        }
+        if (parsedDelay < 1000 || parsedDelay > 60000) {
+          throw new BadRequestException('Delay must be between 1000ms and 60000ms (1-60 seconds)');
+        }
+        messageDelay = parsedDelay;
+      }
+
+      // Check if client is ready
+      // if (!this.whatsappService.isClientReady(client.clientId)) {
+      //   throw new HttpException(
+      //     'WhatsApp client is not ready. Please ensure the session is connected.',
+      //     HttpStatus.SERVICE_UNAVAILABLE
+      //   );
+      // }
+
+      this.logger.log(`📤 Sending bulk messages via client ${client.clientId} with ${messageDelay}ms delay`);
+
+      // Send the bulk message
+      const result = await this.whatsappService.sendMessageExcel(
+        client.clientId,
+        dto,
+        messageDelay,
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Bulk message send completed in ${duration}ms`);
+
+      // Broadcast success to user's sockets if needed
+      this.whatsappGateway.broadcastToUser(userId, 'bulk_message_sent', {
+        accountId,
+        clientId: client.clientId,
+        result,
+        duration,
+      });
+
+      return {
+        ...result,
+        duration,
+        timestamp: Date.now(),
+        accountId,
+        clientId: client.clientId,
+      } as any;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ Bulk message send failed in ${duration}ms: ${error.message}`);
+
+      // Broadcast error to user's sockets
+      this.whatsappGateway.broadcastToUser(userId, 'bulk_message_send_error', {
+        accountId,
+        error: error.message,
+        duration,
+      });
+
+      // Re-throw the error with additional context
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new HttpException(
+        `Failed to send bulk message: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
   }
 
   @Post('send-message')
@@ -150,6 +254,7 @@ export class WhatsAppController {
       );
     }
   }
+  
 
   @Get('sessions')
   async getSessions(@GetUserId() userId: string) {
@@ -625,4 +730,6 @@ export class WhatsAppController {
       );
     }
   }
+
+  
 }

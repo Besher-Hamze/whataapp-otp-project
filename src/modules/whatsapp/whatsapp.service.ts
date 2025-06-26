@@ -146,6 +146,23 @@ export class WhatsAppService implements OnModuleInit {
     return await this.messageSender.sendMessage(clientId, to, message, delayMs);
   }
 
+ async sendMessageExcel(
+        clientId: string,
+        data: { messages: { number: string; message: string }[] },
+        delayMs: number = 3000
+    ): Promise<any> {
+        try {
+            // Delegate to MessageSenderService with the full data object
+            const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs);
+            return result;
+        } catch (error) {
+            throw new HttpException(
+                error.message || 'Failed to process bulk message request',
+                error.status || HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
   async disconnectClient(socketClientId: string) {
     const clientId = this.sessionManager.getClientIdBySocket(socketClientId);
     if (!clientId) {

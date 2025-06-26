@@ -166,7 +166,9 @@ export class MessageSenderService {
 
     const batchPromises = batch.map(async (recipient, batchIndex) => {
       try {
-        const chatId = this.formatChatId(recipient);
+        const cleanedRecipient = recipient.replace(/\D/g, '');
+        const chatId = `${cleanedRecipient}@c.us`;
+
         await clientState.client.sendMessage(chatId, content);
         results.push({ recipient, status: 'sent' });
         this.sessionManager.updateClientState(clientState.client.options.authStrategy.clientId, {
@@ -204,7 +206,8 @@ private async sendToRecipientsWithPhoto(
 
     const batchPromises = batch.map(async (recipient, batchIndex) => {
       try {
-        const chatId = this.formatChatId(recipient);
+        const cleanedRecipient = recipient.replace(/\D/g, '');
+        const chatId = `${cleanedRecipient}@c.us`;
         const media = new MessageMedia(
           photo.mimetype,
           photo.buffer.toString('base64'),

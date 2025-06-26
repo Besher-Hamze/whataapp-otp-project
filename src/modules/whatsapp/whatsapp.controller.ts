@@ -11,6 +11,9 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  UploadedFile,
+  UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppGateway } from './whatsapp.gateway';
@@ -22,6 +25,21 @@ import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
 import { NewMessageDto } from './dto/message.dto';
 import { AccountsService } from '../accounts/accounts.service';
 import { SendMessageExcelDto } from './dto/excel-message.dto';
+import * as multer from 'multer';
+import { FileInterceptor } from '@nestjs/platform-express';
+
+const storage = multer.memoryStorage(); // Temporary in memory
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.match(/image\/(jpg|jpeg|png)/)) {
+      cb(null, true);
+    } else {
+      cb(null, false);
+    }
+  },
+});
 
 @UseGuards(JwtGuard)
 @Controller('whatsapp')
@@ -155,12 +173,16 @@ export class WhatsAppController {
     }
   }
 
-  @Post('send-message')
+@Post('send-message')
+  @UseInterceptors(FileInterceptor('photo', { storage: storage }))
   async sendMessage(
     @Body() body: NewMessageDto,
+    @UploadedFile() file: Express.Multer.File, // Optional file
     @GetUserId() userId: string,
     @GetWhatsappAccountId() accountId: string,
+    @Req() req: Request,
     @Query('delay') delay?: number,
+     // Inject the request object
   ) {
     const startTime = Date.now();
 
@@ -172,9 +194,9 @@ export class WhatsAppController {
         throw new BadRequestException('Recipients (to) must be a non-empty array');
       }
 
-      if (!body.message || typeof body.message !== 'string') {
-        throw new BadRequestException('Message content is required and must be a string');
-      }
+     if ((!body.message || typeof body.message !== 'string' || body.message.trim() === '') && !file) {
+    throw new BadRequestException('Message content is required when photo is not provided.');
+  }
 
       // Find client by account ID
       const client = await this.accountsService.findClientIdByAccountId(accountId, userId);
@@ -195,23 +217,19 @@ export class WhatsAppController {
         messageDelay = parsedDelay;
       }
 
-      // Check if client is ready
-      // if (!this.whatsappService.isClientReady(client.clientId)) {
-      //   throw new HttpException(
-      //     'WhatsApp client is not ready. Please ensure the session is connected.',
-      //     HttpStatus.SERVICE_UNAVAILABLE
-      //   );
-      // }
-
       this.logger.log(`📤 Sending message via client ${client.clientId} with ${messageDelay}ms delay`);
 
       // Send the message
       const result = await this.whatsappService.sendMessage(
         client.clientId,
         body.to,
-        body.message,
+        body.message ?? '',
         messageDelay,
+        file, // Pass the optional file
       );
+
+      // Debug: Log result to identify circular references
+      this.logger.debug(`SendMessage result: ${JSON.stringify(result, null, 2)}`);
 
       const duration = Date.now() - startTime;
       this.logger.log(`✅ Message send completed in ${duration}ms`);
@@ -220,21 +238,23 @@ export class WhatsAppController {
       this.whatsappGateway.broadcastToUser(userId, 'message_sent', {
         accountId,
         clientId: client.clientId,
-        result,
+        result: { message: result.message, results: result.results }, // Safe subset
         duration,
       });
 
+      // Return only safe properties
       return {
-        ...result,
+        message: result.message,
+        results: result.results,
         duration,
         timestamp: Date.now(),
         accountId,
         clientId: client.clientId,
-      } as any;
-
+        photoSent: !!file,
+      };
     } catch (error) {
       const duration = Date.now() - startTime;
-      this.logger.error(`❌ Message send failed in ${duration}ms: ${error.message}`);
+      this.logger.error(`❌ Message send failed in ${duration}ms: ${error.message}`, error.stack);
 
       // Broadcast error to user's sockets
       this.whatsappGateway.broadcastToUser(userId, 'message_send_error', {
@@ -254,7 +274,6 @@ export class WhatsAppController {
       );
     }
   }
-  
 
   @Get('sessions')
   async getSessions(@GetUserId() userId: string) {

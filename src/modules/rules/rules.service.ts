@@ -100,50 +100,53 @@ constructor(
   }
 
   async updateRule(id: string, updateRuleDto: UpdateRuleDto, accountId: string): Promise<Rule | null> {
-    // Check if the rule exists and belongs to the user
-    const existingRule = await this.findRuleById(id, accountId);
+  // Check if the rule exists and belongs to the account
+  const existingRule = await this.findRuleById(id, accountId);
 
-    if (!existingRule) {
-      throw new NotFoundException(`Rule with ID "${id}" not found or does not belong to user`);
-    }
-
-    // If keyword is being updated, check for duplicates
-    if (updateRuleDto.keywords) {
-      const duplicateRule = await this.ruleModel.findOne({
-        keywords: { $in: updateRuleDto.keywords }, // Updated to check keywords array
-        user: accountId,
-        _id: { $ne: id },
-      }).exec();
-
-      if (duplicateRule) {
-        throw new ConflictException('One or more keywords already exist for this user');
-      }
-    }
-
-    const updatedRule = await this.ruleModel
-      .findByIdAndUpdate(
-        id,
-        {
-          ...updateRuleDto,
-          updated_at: new Date(),
-        },
-        { new: true },
-      )
-      .exec();
-
-    this.logger.log(`Updated rule ${id} for user ${accountId}`);
-    return updatedRule;
+  if (!existingRule) {
+    throw new NotFoundException(`Rule with ID "${id}" not found or does not belong to account`);
   }
+
+  // If keywords are being updated, check for duplicates
+  if (updateRuleDto.keywords) {
+    const duplicateRule = await this.ruleModel.findOne({
+      keywords: { $in: updateRuleDto.keywords },
+      account: accountId, // ✅ FIXED
+      _id: { $ne: id },
+    }).exec();
+
+    if (duplicateRule) {
+      throw new ConflictException('One or more keywords already exist for this account');
+    }
+  }
+
+  const updatedRule = await this.ruleModel
+    .findByIdAndUpdate(
+      id,
+      {
+        ...updateRuleDto,
+        updated_at: new Date(),
+      },
+      { new: true },
+    )
+    .exec();
+
+  this.logger.log(`Updated rule ${id} for account ${accountId}`);
+  return updatedRule;
+}
+
 
   async deleteRule(id: string, accountId: string): Promise<void> {
-    // Verify the rule exists and belongs to the user
-    await this.findRuleById(id, accountId);
+  // Verify the rule exists and belongs to the account
+  await this.findRuleById(id, accountId);
 
-    const result = await this.ruleModel.deleteOne({ _id: id, user: accountId }).exec();
-    if (result.deletedCount === 0) {
-      throw new NotFoundException(`Rule with ID "${id}" not found`);
-    }
+  const result = await this.ruleModel.deleteOne({ _id: id, account: accountId }).exec(); // ✅ FIXED
 
-    this.logger.log(`Deleted rule ${id} for user ${accountId}`);
+  if (result.deletedCount === 0) {
+    throw new NotFoundException(`Rule with ID "${id}" not found`);
   }
+
+  this.logger.log(`Deleted rule ${id} for account ${accountId}`);
+}
+
 }

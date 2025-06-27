@@ -11,6 +11,9 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  UploadedFile,
+  UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppGateway } from './whatsapp.gateway';
@@ -21,6 +24,22 @@ import { JwtGuard } from 'src/common/guards/jwt.guard';
 import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
 import { NewMessageDto } from './dto/message.dto';
 import { AccountsService } from '../accounts/accounts.service';
+import { SendMessageExcelDto } from './dto/excel-message.dto';
+import * as multer from 'multer';
+import { FileInterceptor } from '@nestjs/platform-express';
+
+const storage = multer.memoryStorage(); // Temporary in memory
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.match(/image\/(jpg|jpeg|png)/)) {
+      cb(null, true);
+    } else {
+      cb(null, false);
+    }
+  },
+});
 
 @UseGuards(JwtGuard)
 @Controller('whatsapp')
@@ -51,9 +70,9 @@ export class WhatsAppController {
     };
   }
 
-  @Post('send-message')
-  async sendMessage(
-    @Body() body: NewMessageDto,
+ @Post('send-excel')
+  async sendExcel(
+    @Body() dto: SendMessageExcelDto,
     @GetUserId() userId: string,
     @GetWhatsappAccountId() accountId: string,
     @Query('delay') delay?: number,
@@ -61,15 +80,20 @@ export class WhatsAppController {
     const startTime = Date.now();
 
     try {
-      this.logger.log(`📤 Message send request from user ${userId} for account ${accountId}`);
+      this.logger.log(`📤 Bulk message send request from user ${userId} for account ${accountId}`);
 
       // Validate input
-      if (!body.to || !Array.isArray(body.to) || body.to.length === 0) {
-        throw new BadRequestException('Recipients (to) must be a non-empty array');
+      if (!dto.messages || !Array.isArray(dto.messages) || dto.messages.length === 0) {
+        throw new BadRequestException('Messages must be a non-empty array');
       }
 
-      if (!body.message || typeof body.message !== 'string') {
-        throw new BadRequestException('Message content is required and must be a string');
+      for (const item of dto.messages) {
+        if (!item.number || typeof item.number !== 'string') {
+          throw new BadRequestException('Each message must have a valid number');
+        }
+        if (!item.message || typeof item.message !== 'string') {
+          throw new BadRequestException('Each message must have valid content');
+        }
       }
 
       // Find client by account ID
@@ -99,21 +123,20 @@ export class WhatsAppController {
       //   );
       // }
 
-      this.logger.log(`📤 Sending message via client ${client.clientId} with ${messageDelay}ms delay`);
+      this.logger.log(`📤 Sending bulk messages via client ${client.clientId} with ${messageDelay}ms delay`);
 
-      // Send the message
-      const result = await this.whatsappService.sendMessage(
+      // Send the bulk message
+      const result = await this.whatsappService.sendMessageExcel(
         client.clientId,
-        body.to,
-        body.message,
+        dto,
         messageDelay,
       );
 
       const duration = Date.now() - startTime;
-      this.logger.log(`✅ Message send completed in ${duration}ms`);
+      this.logger.log(`✅ Bulk message send completed in ${duration}ms`);
 
       // Broadcast success to user's sockets if needed
-      this.whatsappGateway.broadcastToUser(userId, 'message_sent', {
+      this.whatsappGateway.broadcastToUser(userId, 'bulk_message_sent', {
         accountId,
         clientId: client.clientId,
         result,
@@ -127,10 +150,111 @@ export class WhatsAppController {
         accountId,
         clientId: client.clientId,
       } as any;
-
     } catch (error) {
       const duration = Date.now() - startTime;
-      this.logger.error(`❌ Message send failed in ${duration}ms: ${error.message}`);
+      this.logger.error(`❌ Bulk message send failed in ${duration}ms: ${error.message}`);
+
+      // Broadcast error to user's sockets
+      this.whatsappGateway.broadcastToUser(userId, 'bulk_message_send_error', {
+        accountId,
+        error: error.message,
+        duration,
+      });
+
+      // Re-throw the error with additional context
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new HttpException(
+        `Failed to send bulk message: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+@Post('send-message')
+  @UseInterceptors(FileInterceptor('photo', { storage: storage }))
+  async sendMessage(
+    @Body() body: NewMessageDto,
+    @UploadedFile() file: Express.Multer.File, // Optional file
+    @GetUserId() userId: string,
+    @GetWhatsappAccountId() accountId: string,
+    @Req() req: Request,
+    @Query('delay') delay?: number,
+     // Inject the request object
+  ) {
+    const startTime = Date.now();
+
+    try {
+      this.logger.log(`📤 Message send request from user ${userId} for account ${accountId}`);
+
+      // Validate input
+      if (!body.to || !Array.isArray(body.to) || body.to.length === 0) {
+        throw new BadRequestException('Recipients (to) must be a non-empty array');
+      }
+
+     if ((!body.message || typeof body.message !== 'string' || body.message.trim() === '') && !file) {
+    throw new BadRequestException('Message content is required when photo is not provided.');
+  }
+
+      // Find client by account ID
+      const client = await this.accountsService.findClientIdByAccountId(accountId, userId);
+      if (!client) {
+        throw new BadRequestException('Account not found or does not belong to user');
+      }
+
+      // Validate delay parameter
+      let messageDelay = 5000; // Default 5 seconds
+      if (delay !== undefined) {
+        const parsedDelay = parseInt(delay.toString(), 10);
+        if (isNaN(parsedDelay)) {
+          throw new BadRequestException('Delay must be a valid number');
+        }
+        if (parsedDelay < 1000 || parsedDelay > 60000) {
+          throw new BadRequestException('Delay must be between 1000ms and 60000ms (1-60 seconds)');
+        }
+        messageDelay = parsedDelay;
+      }
+
+      this.logger.log(`📤 Sending message via client ${client.clientId} with ${messageDelay}ms delay`);
+
+      // Send the message
+      const result = await this.whatsappService.sendMessage(
+        client.clientId,
+        body.to,
+        body.message ?? '',
+        messageDelay,
+        file, // Pass the optional file
+      );
+
+      // Debug: Log result to identify circular references
+      this.logger.debug(`SendMessage result: ${JSON.stringify(result, null, 2)}`);
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Message send completed in ${duration}ms`);
+
+      // Broadcast success to user's sockets if needed
+      this.whatsappGateway.broadcastToUser(userId, 'message_sent', {
+        accountId,
+        clientId: client.clientId,
+        result: { message: result.message, results: result.results }, // Safe subset
+        duration,
+      });
+
+      // Return only safe properties
+      return {
+        message: result.message,
+        results: result.results,
+        duration,
+        timestamp: Date.now(),
+        accountId,
+        clientId: client.clientId,
+        photoSent: !!file,
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ Message send failed in ${duration}ms: ${error.message}`, error.stack);
 
       // Broadcast error to user's sockets
       this.whatsappGateway.broadcastToUser(userId, 'message_send_error', {
@@ -625,4 +749,6 @@ export class WhatsAppController {
       );
     }
   }
+
+  
 }

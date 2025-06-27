@@ -10,6 +10,9 @@ import { ReconnectionService } from './reconnection.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from 'src/modules/accounts/schema/account.schema';
+import { ContactsService } from '../../contacts/contacts.service'; // Adjust the path as needed
+import { CreateContactDto } from 'src/modules/contacts/dto/create-contact.dto';
+
 
 @Injectable()
 export class EventHandlerService {
@@ -22,8 +25,8 @@ export class EventHandlerService {
         private readonly sessionManager: SessionManagerService,
         private readonly accountService: AccountService,
         private readonly cleanupService: CleanupService, // New
-        private readonly reconnectionService: ReconnectionService
-
+        private readonly reconnectionService: ReconnectionService,
+        private readonly contactService: ContactsService,
     ) { }
 
     setupEventHandlers(
@@ -137,43 +140,86 @@ export class EventHandlerService {
         });
     }
 
-    private async handleClientReady(
-        client: Client,
-        clientId: string,
-        emit: (event: string, data: any) => void,
-        userId: string
-    ): Promise<void> {
-        // Stop loading when client is ready
-        emit('loading_status', { loading: false });
+private async handleClientReady(
+    client: Client,
+    clientId: string,
+    emit: (event: string, data: any) => void,
+    userId: string
+): Promise<void> {
+    // Stop loading when client is ready
+    emit('loading_status', { loading: false });
 
-        const userInfo = client.info;
-        const phoneNumber = userInfo?.wid?.user || 'Unknown';
-        const name = userInfo?.pushname || 'Unknown';
+    const userInfo = client.info;
+    const phoneNumber = userInfo?.wid?.user || 'Unknown';
+    const name = userInfo?.pushname || 'Unknown';
 
-        await this.accountService.handleAccountReady(phoneNumber, name, clientId, userId);
+    // Save account
+    const account = await this.accountService.handleAccountReady(phoneNumber, name, clientId, userId);
+    const accountId = account._id.toString();
 
-        this.sessionManager.updateClientState(clientId, {
-            isReady: true,
-            lastActivity: Date.now(),
-            reconnectAttempts: 0,
-        });
+    this.sessionManager.updateClientState(clientId, {
+        isReady: true,
+        lastActivity: Date.now(),
+        reconnectAttempts: 0,
+    });
 
-        // Save session state to database
-        await this.sessionManager.saveSessionState(clientId);
+    // Save session state to database
+    await this.sessionManager.saveSessionState(clientId);
 
-        const isRestored = this.sessionManager.isRestoredSession(clientId);
+    const isRestored = this.sessionManager.isRestoredSession(clientId);
 
-        emit('ready', {
-            phoneNumber,
-            name,
-            clientId,
-            status: 'active',
-            isRestored,
-            message: isRestored ? 'WhatsApp session restored successfully.' : 'WhatsApp client ready and account saved/updated.',
-        });
+    // ✅ Fetch and filter contacts
+    // ✅ Fetch all WhatsApp contacts
+const allContacts = await client.getContacts();
 
-        this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
+// ✅ Strictly filter saved contacts
+const savedContacts = allContacts.filter((c) =>
+    c.isMyContact &&                        // Saved in address book
+    c.isUser &&                             // Is a WhatsApp user
+    c.id && c.id.user &&                    // Has valid ID
+    /^\d{7,15}$/.test(c.id.user)            // Number looks real (7-15 digits)
+);
+
+const seenNumbers = new Set<string>();
+
+for (const contact of savedContacts) {
+    const rawNumber = contact.id.user;
+    const phoneNumber = '+' + rawNumber;
+
+    if (seenNumbers.has(phoneNumber)) continue;
+    seenNumbers.add(phoneNumber);
+
+    const displayName = contact.name || contact.pushname || 'Unnamed';
+
+    const createContactDto: CreateContactDto = {
+        name: displayName,
+        phone_number: phoneNumber,
+        account: accountId,
+    };
+
+    try {
+        await this.contactService.create(createContactDto, accountId);
+    } catch (err) {
+        this.logger.warn(`⚠️ Skipped contact ${phoneNumber}: ${err.message}`);
     }
+}
+
+
+    emit('ready', {
+        phoneNumber,
+        name,
+        clientId,
+        status: 'active',
+        isRestored,
+        message: isRestored
+            ? 'WhatsApp session restored successfully.'
+            : 'WhatsApp client ready and account saved/updated.',
+    });
+
+    this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
+}
+
+
 
 private async handleClientDisconnected(
         client: Client,

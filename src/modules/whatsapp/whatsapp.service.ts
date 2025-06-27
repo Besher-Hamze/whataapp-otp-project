@@ -140,11 +140,29 @@ export class WhatsAppService implements OnModuleInit {
   async sendMessage(
     clientId: string,
     to: string[],
-    message: string,
-    delayMs: number = 3000
+    message?: string,
+    delayMs: number = 3000,
+    photo?: Express.Multer.File
   ): Promise<any> {
-    return await this.messageSender.sendMessage(clientId, to, message, delayMs);
+    return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo);
   }
+
+ async sendMessageExcel(
+        clientId: string,
+        data: { messages: { number: string; message: string }[] },
+        delayMs: number = 3000
+    ): Promise<any> {
+        try {
+            // Delegate to MessageSenderService with the full data object
+            const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs);
+            return result;
+        } catch (error) {
+            throw new HttpException(
+                error.message || 'Failed to process bulk message request',
+                error.status || HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+    }
 
   async disconnectClient(socketClientId: string) {
     const clientId = this.sessionManager.getClientIdBySocket(socketClientId);
@@ -169,7 +187,7 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async deleteAccount(accountId: string) {
-    const account = await this.accountService.findAccountByClientId(accountId);
+    const account = await this.accountService.findAccountById(accountId);
     if (!account) {
       throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
     }

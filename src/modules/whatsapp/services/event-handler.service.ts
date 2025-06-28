@@ -236,7 +236,7 @@ export class EventHandlerService {
 
         await this.sessionManager.saveSessionState(clientId);
         const isRestored = this.sessionManager.isRestoredSession(clientId);
-
+        await new Promise(resolve => setTimeout(resolve, 5000)); 
 const allContacts = await client.getContacts();
 
     const savedContacts = allContacts.filter((contact: Contact) => {

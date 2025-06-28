@@ -12,10 +12,10 @@ export class RulesController {
 
   @Post()
   create(
-    @Body() createRuleDto: CreateRuleDto,
+    @Body() createRuleDto: CreateRuleDto[],
     @GetWhatsappAccountId() accountId: string
   ) {
-    return this.rulesService.create([createRuleDto], accountId);
+    return this.rulesService.create(createRuleDto, accountId);
   }
 
   @Get()

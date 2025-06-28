@@ -182,11 +182,8 @@ export class WhatsAppController {
     @GetWhatsappAccountId() accountId: string,
     @Req() req: Request,
     @Query('delay') delay?: number,
-    // Inject the request object
   ) {
     console.log(body);
-
-    const startTime = Date.now();
 
     try {
       this.logger.log(`📤 Message send request from user ${userId} for account ${accountId}`);
@@ -195,8 +192,6 @@ export class WhatsAppController {
       if (!body.to || !Array.isArray(body.to) || body.to.length === 0) {
         throw new BadRequestException('Recipients (to) must be a non-empty array');
       }
-
-
 
       if ((!body.message || typeof body.message !== 'string' || body.message.trim() === '') && !file) {
         throw new BadRequestException('Message content is required when photo is not provided.');
@@ -209,7 +204,7 @@ export class WhatsAppController {
       }
 
       // Validate delay parameter
-      let messageDelay = 30000; // Default 5 seconds
+      let messageDelay = 30000; // Default 30 seconds
       if (delay !== undefined) {
         const parsedDelay = parseInt(delay.toString(), 10);
         if (isNaN(parsedDelay)) {
@@ -221,61 +216,109 @@ export class WhatsAppController {
         messageDelay = parsedDelay;
       }
 
-      this.logger.log(`📤 Sending message via client ${client.clientId} with ${messageDelay}ms delay`);
+      // Generate a unique message ID for tracking
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Send the message
-      const result = await this.whatsappService.sendMessage(
+      // Start the async message sending process (don't await)
+      this.processMessageAsync(
         client.clientId,
         body.to,
         body.message ?? '',
         messageDelay,
-        file, // Pass the optional file
+        file,
+        userId,
+        accountId,
+        messageId
       );
 
-      // Debug: Log result to identify circular references
-      this.logger.debug(`SendMessage result: ${JSON.stringify(result, null, 2)}`);
-
-      const duration = Date.now() - startTime;
-      this.logger.log(`✅ Message send completed in ${duration}ms`);
-
-      // Broadcast success to user's sockets if needed
-      this.whatsappGateway.broadcastToUser(userId, 'message_sent', {
-        accountId,
-        clientId: client.clientId,
-        result: { message: result.message, results: result.results }, // Safe subset
-        duration,
-      });
-
-      // Return only safe properties
+      // Return immediately with confirmation
       return {
-        message: result.message,
-        results: result.results,
-        duration,
-        timestamp: Date.now(),
+        message: 'Message queued for sending',
+        messageId,
         accountId,
         clientId: client.clientId,
-        photoSent: !!file,
+        recipients: body.to.length,
+        photoIncluded: !!file,
+        estimatedDelay: messageDelay,
+        timestamp: Date.now(),
       };
+
     } catch (error) {
-      const duration = Date.now() - startTime;
-      this.logger.error(`❌ Message send failed in ${duration}ms: ${error.message}`, error.stack);
+      this.logger.error(`❌ Message validation failed: ${error.message}`, error.stack);
 
-      // Broadcast error to user's sockets
-      this.whatsappGateway.broadcastToUser(userId, 'message_send_error', {
-        accountId,
-        error: error.message,
-        duration,
-      });
-
-      // Re-throw the error with additional context
       if (error instanceof HttpException) {
         throw error;
       }
 
       throw new HttpException(
-        `Failed to send message: ${error.message}`,
+        `Failed to queue message: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR
       );
+    }
+  }
+
+  // Private method to handle the actual message sending asynchronously
+  private async processMessageAsync(
+    clientId: string,
+    recipients: string[],
+    message: string,
+    messageDelay: number,
+    file: Express.Multer.File | undefined,
+    userId: string,
+    accountId: string,
+    messageId: string
+  ) {
+    const startTime = Date.now();
+
+    try {
+      this.logger.log(`📤 Processing message ${messageId} via client ${clientId} with ${messageDelay}ms delay`);
+
+      // Notify user that processing started
+      this.whatsappGateway.broadcastToUser(userId, 'message_processing_started', {
+        messageId,
+        accountId,
+        clientId,
+        timestamp: Date.now(),
+      });
+
+      // Send the message
+      const result = await this.whatsappService.sendMessage(
+        clientId,
+        recipients,
+        message,
+        messageDelay,
+        file,
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ Message ${messageId} completed in ${duration}ms`);
+
+      // Broadcast success to user's sockets
+      this.whatsappGateway.broadcastToUser(userId, 'message_sent', {
+        messageId,
+        accountId,
+        clientId,
+        result: {
+          message: result.message,
+          results: result.results
+        },
+        duration,
+        timestamp: Date.now(),
+      });
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ Message ${messageId} failed in ${duration}ms: ${error.message}`, error.stack);
+
+      // Broadcast error to user's sockets
+      this.whatsappGateway.broadcastToUser(userId, 'message_send_error', {
+        messageId,
+        accountId,
+        clientId,
+        error: error.message,
+        duration,
+        timestamp: Date.now(),
+      });
     }
   }
 

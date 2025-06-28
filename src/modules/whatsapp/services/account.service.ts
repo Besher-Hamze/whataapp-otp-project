@@ -101,7 +101,10 @@ async deleteAccountOnLogout(accountId: string): Promise<void> {
       }
 
       const userId = account.user.toString();
-
+   // Debug: Check matching groups before deletion
+      const groupCount = await this.groupModel.countDocuments({ account: accountId }).exec();
+      this.logger.debug(`🔍 Found ${groupCount} groups for account ${accountId} before deletion`);
+      
       // Perform deletions
       const deletePromises = [
         this.contactModel.deleteMany({ account: accountId }).then(result => {

@@ -22,12 +22,8 @@ export class ContactsController {
   @Get()
   findAll(
     @GetWhatsappAccountId() accountId: string,
-    @Query('search') search?: string,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number = 50
   ) {
-    const skip = (page - 1) * limit;
-    return this.contactsService.findAllContacts(accountId, search, skip, limit);
+    return this.contactsService.findAllContacts(accountId);
   }
 
   @Get(':id')

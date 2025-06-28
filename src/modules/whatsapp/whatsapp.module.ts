@@ -26,6 +26,10 @@ import { SessionRestorationService } from './services/session-restoration.servic
 import { CleanupService } from './services/cleanup.service';
 import { ReconnectionService } from './services/reconnection.service';
 import { ProtocolErrorHandlerService } from './services/protocol-error-handler.service';
+import { Contact, ContactSchema } from '../contacts/schema/contacts.schema';
+import { Group, GroupSchema } from '../groups/schema/groups.schema';
+import { Rule, RuleSchema } from '../rules/schema/rules.schema';
+import { Template, TemplateSchema } from '../templates/schema/template.schema';
 
 @Module({
   imports: [
@@ -36,6 +40,10 @@ import { ProtocolErrorHandlerService } from './services/protocol-error-handler.s
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Account.name, schema: AccountSchema },
+      { name: Contact.name, schema: ContactSchema },
+      { name: Group.name, schema: GroupSchema },
+      { name: Rule.name, schema: RuleSchema },
+      { name: Template.name, schema: TemplateSchema },
     ]),
     UsersModule,
     AccountsModule,

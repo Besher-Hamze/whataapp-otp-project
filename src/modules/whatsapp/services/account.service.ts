@@ -1,5 +1,5 @@
 // src/whatsapp/services/account.service.ts
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
@@ -7,6 +7,10 @@ import { AuthService } from '../../auth/auth.service';
 import { CleanupService } from './cleanup.service';
 import { SessionManagerService } from './session-manager.service';
 import { Client } from 'whatsapp-web.js';
+import { Contact, ContactDocument } from 'src/modules/contacts/schema/contacts.schema';
+import { Group, GroupDocument } from 'src/modules/groups/schema/groups.schema';
+import { Rule, RuleDocument } from 'src/modules/rules/schema/rules.schema';
+import { Template, TemplateDocument } from 'src/modules/templates/schema/template.schema';
 
 @Injectable()
 export class AccountService {
@@ -14,6 +18,10 @@ export class AccountService {
 
     constructor(
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
+        @InjectModel(Contact.name) private contactModel: Model<ContactDocument>,
+        @InjectModel(Group.name) private groupModel: Model<GroupDocument>,
+        @InjectModel(Rule.name) private ruleModel: Model<RuleDocument>,
+        @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
         private readonly authService: AuthService,
         private readonly cleanupService: CleanupService, // Injected
         private readonly sessionManager: SessionManagerService
@@ -84,15 +92,52 @@ async handleAccountReady(phoneNumber: string, name: string, clientId: string, us
         }
       }
 
-    async deleteAccountOnLogout(accountId: string): Promise<void> {
-        const account = await this.accountModel.findById(accountId).exec();
-        if (account) {
-            const userId = account.user.toString();
-            await this.authService.removeAccountFromTokens(userId, accountId);
-            await this.accountModel.deleteOne({ _id: accountId }).exec();
-            this.logger.log(`✅ Account ${accountId} deleted on logout`);
-        }
+async deleteAccountOnLogout(accountId: string): Promise<void> {
+    try {
+      const account = await this.accountModel.findById(accountId).exec();
+      if (!account) {
+        this.logger.warn(`⚠️ Account ${accountId} not found`);
+        return;
+      }
+
+      const userId = account.user.toString();
+   // Debug: Check matching groups before deletion
+      const groupCount = await this.groupModel.countDocuments({ account: accountId }).exec();
+      this.logger.debug(`🔍 Found ${groupCount} groups for account ${accountId} before deletion`);
+      
+      // Perform deletions
+      const deletePromises = [
+        this.contactModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} contacts for account ${accountId}`);
+          return result;
+        }),
+        this.groupModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} groups for account ${accountId}`);
+          return result;
+        }),
+        this.ruleModel.deleteMany({account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} rules for account ${accountId}`);
+          return result;
+        }),
+        this.templateModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} templates for account ${accountId}`);
+          return result;
+        }),
+        this.accountModel.deleteOne({ _id: accountId }).then(result => {
+          this.logger.log(`✅ Deleted account ${accountId}`);
+          return result;
+        }),
+      ];
+
+      await this.authService.removeAccountFromTokens(userId, accountId);
+      await Promise.all(deletePromises);
+
+      this.logger.log(`✅ Deleted account and all related data for ${accountId}`);
+    } catch (error) {
+      this.logger.error(`❌ Error deleting account ${accountId}: ${error.message}`, error.stack);
+      throw new HttpException(`Failed to delete account: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
 
     async getUserAccounts(userId: string): Promise<AccountDocument[]> {
         return await this.accountModel.find({ user: userId }).lean().exec();

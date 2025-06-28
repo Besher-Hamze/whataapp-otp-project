@@ -112,16 +112,11 @@ export class ContactsService {
     // Build query based on account ID and optional search term
     const query: any = { account: accountId };
 
-
-
     // Get total count for pagination
     const total = await this.contactModel.countDocuments(query);
 
     // Get paginated results
     const contacts = await this.contactModel.find(query)
-      .sort({ name: 1 }) // Sort by name
-      // .skip(skip)
-      // .limit(limit)
       .populate('groups', 'name') // Include group names
       .exec();
 

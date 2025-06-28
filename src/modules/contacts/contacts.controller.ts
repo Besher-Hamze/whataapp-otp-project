@@ -21,7 +21,8 @@ export class ContactsController {
 
   @Get()
   findAll(
-    @GetWhatsappAccountId() accountId: string) {
+    @GetWhatsappAccountId() accountId: string,
+  ) {
     return this.contactsService.findAllContacts(accountId);
   }
 

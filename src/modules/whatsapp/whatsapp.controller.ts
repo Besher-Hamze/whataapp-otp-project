@@ -70,7 +70,7 @@ export class WhatsAppController {
     };
   }
 
- @Post('send-excel')
+  @Post('send-excel')
   async sendExcel(
     @Body() dto: SendMessageExcelDto,
     @GetUserId() userId: string,
@@ -173,7 +173,7 @@ export class WhatsAppController {
     }
   }
 
-@Post('send-message')
+  @Post('send-message')
   @UseInterceptors(FileInterceptor('photo', { storage: storage }))
   async sendMessage(
     @Body() body: NewMessageDto,
@@ -182,8 +182,10 @@ export class WhatsAppController {
     @GetWhatsappAccountId() accountId: string,
     @Req() req: Request,
     @Query('delay') delay?: number,
-     // Inject the request object
+    // Inject the request object
   ) {
+    console.log(body);
+
     const startTime = Date.now();
 
     try {
@@ -194,9 +196,11 @@ export class WhatsAppController {
         throw new BadRequestException('Recipients (to) must be a non-empty array');
       }
 
-     if ((!body.message || typeof body.message !== 'string' || body.message.trim() === '') && !file) {
-    throw new BadRequestException('Message content is required when photo is not provided.');
-  }
+
+
+      if ((!body.message || typeof body.message !== 'string' || body.message.trim() === '') && !file) {
+        throw new BadRequestException('Message content is required when photo is not provided.');
+      }
 
       // Find client by account ID
       const client = await this.accountsService.findClientIdByAccountId(accountId, userId);
@@ -750,5 +754,5 @@ export class WhatsAppController {
     }
   }
 
-  
+
 }

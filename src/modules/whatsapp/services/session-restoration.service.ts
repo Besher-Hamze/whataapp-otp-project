@@ -5,6 +5,7 @@ import { Account, AccountDocument } from '../../accounts/schema/account.schema';
 import { SessionManagerService } from './session-manager.service';
 import { EventHandlerService } from './event-handler.service';
 import { FileManagerService } from './file-manager.service';
+import { MessageHandlerService } from './message-handler.service'; // ✅ Add this import
 import * as path from 'path';
 
 @Injectable()
@@ -16,12 +17,13 @@ export class SessionRestorationService {
         private readonly sessionManager: SessionManagerService,
         private readonly eventHandler: EventHandlerService,
         private readonly fileManager: FileManagerService,
+        private readonly messageHandler: MessageHandlerService, // ✅ Add this dependency
     ) { }
 
     async loadClientsFromSessions() {
         try {
             this.logger.log('🔄 Starting session restoration process...');
-            
+
             const sessionFolders = this.fileManager.loadSessionFolders();
             this.logger.log(`📁 Found ${sessionFolders.length} session folders`);
 
@@ -60,7 +62,7 @@ export class SessionRestorationService {
                     continue;
                 }
 
-                // Restore the session
+                // Restore the session with full message handling
                 await this.restoreSessionSilently(clientId, account.user.toString());
             }
 
@@ -72,33 +74,43 @@ export class SessionRestorationService {
 
     private async restoreSessionSilently(clientId: string, userId: string) {
         try {
-            this.logger.log(`🔄 Restoring session ${clientId} silently...`);
-            
+            this.logger.log(`🔄 Restoring session ${clientId} silently with full message handling...`);
+
             const client = await this.sessionManager.createSession(clientId, userId, true);
-            
-            // Set up minimal event handlers for restored sessions
-            this.setupRestoredSessionEvents(client, clientId);
-            
+
+            // ✅ OPTION 1: Use full event handlers for restored sessions (RECOMMENDED)
+            // Create a no-op emit function for restored sessions
+            const silentEmit = (event: string, data: any) => {
+                this.logger.debug(`📡 Silent restored session event: ${event} for ${clientId}`);
+                // You can add any silent event handling here if needed
+            };
+
+            // Set up FULL event handlers including message handling
+            this.eventHandler.setupEventHandlers(client, clientId, silentEmit, userId);
+
+            // ✅ ALTERNATIVE OPTION 2: Use enhanced restored session events (if you prefer minimal setup)
+            // this.setupEnhancedRestoredSessionEvents(client, clientId, userId);
+
             // Initialize the client
             await client.initialize();
-            
-            this.logger.log(`✅ Session ${clientId} restored successfully`);
+
+            this.logger.log(`✅ Session ${clientId} restored successfully with full message handling`);
         } catch (error) {
             this.logger.error(`❌ Failed to restore session ${clientId}: ${error.message}`);
-            
+
             try {
-                await this.fileManager.cleanupSessionFiles(clientId, false); // Non-force cleanup for failed restore
+                await this.fileManager.cleanupSessionFiles(clientId, false);
             } catch (cleanupError) {
                 this.logger.warn(`Warning: Could not cleanup files for failed restore ${clientId}: ${cleanupError.message}`);
             }
-            
+
             this.sessionManager.removeSession(clientId);
-            
+
             // Mark account as disconnected
             await this.accountModel.updateOne(
                 { clientId },
-                { 
-                    $set: { 
+                {
+                    $set: {
                         status: 'disconnected',
                         'sessionData.isAuthenticated': false,
                         'sessionData.sessionValid': false,
@@ -109,52 +121,72 @@ export class SessionRestorationService {
         }
     }
 
-    private setupRestoredSessionEvents(client: any, clientId: string): void {
+    // ✅ ALTERNATIVE: Enhanced restored session events with message handling
+    private setupEnhancedRestoredSessionEvents(client: any, clientId: string, userId: string): void {
         let isCleaningUp = false;
         let isLoggedOut = false;
+
+        this.logger.log(`🔧 Setting up enhanced restored session events with message handling for ${clientId}`);
+
+        // ✅ CRITICAL: Add full message handling for restored sessions
+        client.on('message', async (message) => {
+            try {
+                if (isCleaningUp || isLoggedOut) return;
+
+                this.logger.log(`📨 RESTORED SESSION - Message received for ${clientId} from ${message.from}`);
+
+                // Update last activity
+                this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
+
+                // ✅ PROCESS MESSAGE THROUGH FULL PIPELINE (same as new sessions)
+                await this.messageHandler.handleIncomingMessage(message, clientId);
+
+                this.logger.log(`✅ RESTORED SESSION - Message processed for ${clientId}`);
+            } catch (error) {
+                this.logger.error(`❌ Error handling message in restored session ${clientId}: ${error.message}`);
+            }
+        });
 
         // Handle ready event
         client.on('ready', async () => {
             if (isCleaningUp || isLoggedOut) return;
-            
-            this.sessionManager.updateClientState(clientId, { 
-                isReady: true, 
+
+            this.sessionManager.updateClientState(clientId, {
+                isReady: true,
                 lastActivity: Date.now(),
-                reconnectAttempts: 0 
+                reconnectAttempts: 0
             });
             await this.sessionManager.saveSessionState(clientId);
-            this.logger.log(`✅ Restored session ${clientId} is ready`);
+
+            // ✅ Log message handler status for restored sessions
+            this.logger.log(`✅ Restored session ${clientId} is ready - Message handlers: ${this.messageHandler.getHandlerCount()}`);
         });
 
         // Handle disconnection
         client.on('disconnected', async (reason: string) => {
             if (isCleaningUp) return;
-            
+
             this.logger.warn(`🔌 Restored session ${clientId} disconnected: ${reason}`);
             await this.sessionManager.markSessionAsDisconnected(clientId);
             this.sessionManager.updateClientState(clientId, { isReady: false });
 
-            // Check if this is a logout
             if (this.isLogoutReason(reason)) {
                 isLoggedOut = true;
                 isCleaningUp = true;
-                
+
                 this.logger.log(`🔒 Session ${clientId} logged out, cleaning up...`);
-                
-                // Immediately remove all listeners to prevent further events
+
                 try {
                     client.removeAllListeners();
                 } catch (error) {
                     this.logger.debug(`Could not remove listeners: ${error.message}`);
                 }
-                
-                // Schedule cleanup after a short delay to let any pending operations complete
+
                 setTimeout(async () => {
                     try {
                         await this.cleanupLoggedOutSession(clientId);
                     } catch (error) {
                         this.logger.error(`❌ Logout cleanup failed for ${clientId}: ${error.message}`);
-                        // Never let cleanup errors crash the application
                     }
                 }, 1000);
             }
@@ -163,7 +195,7 @@ export class SessionRestorationService {
         // Handle auth failure
         client.on('auth_failure', async () => {
             if (isCleaningUp || isLoggedOut) return;
-            
+
             this.logger.error(`🚫 Restored session ${clientId} auth failed`);
             await this.sessionManager.markSessionAsDisconnected(clientId);
             this.sessionManager.removeSession(clientId);
@@ -172,20 +204,13 @@ export class SessionRestorationService {
         // Handle errors
         client.on('error', (error: Error) => {
             if (isCleaningUp || isLoggedOut) return;
-            
-            // Ignore protocol errors that happen during logout
+
             if (error.message.includes('Protocol error') && error.message.includes('Session closed')) {
                 this.logger.debug(`Ignoring protocol error during logout for ${clientId}: ${error.message}`);
                 return;
             }
-            
-            this.logger.error(`❌ Restored session ${clientId} error: ${error.message}`);
-        });
 
-        // Handle message events to update activity
-        client.on('message', () => {
-            if (isCleaningUp || isLoggedOut) return;
-            this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
+            this.logger.error(`❌ Restored session ${clientId} error: ${error.message}`);
         });
 
         // Handle authentication
@@ -194,6 +219,14 @@ export class SessionRestorationService {
             this.logger.log(`🔐 Restored session ${clientId} authenticated`);
             this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
         });
+
+        this.logger.log(`✅ Enhanced restored session events setup completed for ${clientId}`);
+    }
+
+    // ✅ Keep the original minimal setup as a fallback option
+    private setupRestoredSessionEvents(client: any, clientId: string): void {
+        // ... keep your original implementation for backward compatibility
+        this.setupEnhancedRestoredSessionEvents(client, clientId, 'unknown');
     }
 
     private isLogoutReason(reason: string): boolean {
@@ -207,72 +240,64 @@ export class SessionRestorationService {
     private async cleanupLoggedOutSession(clientId: string): Promise<void> {
         try {
             this.logger.log(`🧹 Starting logout cleanup for ${clientId}`);
-            
-            // First, try to get the client and properly destroy it
+
             const clientState = this.sessionManager.getClientState(clientId);
             if (clientState?.client) {
                 try {
-                    // Remove all listeners first to prevent race conditions
                     clientState.client.removeAllListeners();
-                    
-                    // Give a moment for any pending operations to complete
                     await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    // Destroy the client
                     await clientState.client.destroy();
                     this.logger.debug(`✅ Client destroyed for ${clientId}`);
                 } catch (destroyError) {
                     this.logger.warn(`Warning during client destruction for ${clientId}: ${destroyError.message}`);
                 }
             }
-            
-            // Clean up files with force flag for logout
+
             await this.fileManager.cleanupSessionFiles(clientId, true);
-            
-            // Remove from session manager
             this.sessionManager.removeSession(clientId);
-            
-            // Update account in database
+
             const account = await this.accountModel.findOne({ clientId }).exec();
             if (account) {
                 await this.accountModel.deleteOne({ _id: account._id }).exec();
                 this.logger.log(`✅ Account ${account._id} deleted after logout`);
             }
-            
+
             this.logger.log(`✅ Logout cleanup completed for ${clientId}`);
         } catch (error) {
             this.logger.error(`❌ Error cleaning up logged out session ${clientId}: ${error.message}`);
-            // Don't throw here, as logout cleanup is best-effort
         }
     }
 
     async restoreSpecificSession(clientId: string, userId: string, emit?: (event: string, data: any) => void): Promise<boolean> {
         try {
             this.logger.log(`🔄 Restoring specific session ${clientId} with events...`);
-            
+
             const client = await this.sessionManager.createSession(clientId, userId, true);
-            
-            // Set up full event handlers if emit function is provided
+
+            // ✅ ALWAYS use full event handlers for specific session restoration
             if (emit) {
                 this.eventHandler.setupEventHandlers(client, clientId, emit, userId);
             } else {
-                this.setupRestoredSessionEvents(client, clientId);
+                // Use silent emit for manual restoration
+                const silentEmit = (event: string, data: any) => {
+                    this.logger.debug(`📡 Silent manual session event: ${event} for ${clientId}`);
+                };
+                this.eventHandler.setupEventHandlers(client, clientId, silentEmit, userId);
             }
-            
-            // Initialize the client
+
             await client.initialize();
-            
-            this.logger.log(`✅ Session ${clientId} restored with events`);
+
+            this.logger.log(`✅ Session ${clientId} restored with full event handling`);
             return true;
         } catch (error) {
             this.logger.error(`❌ Failed to restore specific session ${clientId}: ${error.message}`);
-            
+
             try {
-                await this.fileManager.cleanupSessionFiles(clientId, false); // Non-force cleanup for failed restore
+                await this.fileManager.cleanupSessionFiles(clientId, false);
             } catch (cleanupError) {
                 this.logger.warn(`Warning: Could not cleanup files for failed specific restore ${clientId}: ${cleanupError.message}`);
             }
-            
+
             this.sessionManager.removeSession(clientId);
             return false;
         }

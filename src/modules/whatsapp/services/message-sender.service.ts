@@ -3,267 +3,444 @@ import { SessionManagerService } from './session-manager.service';
 import { RecipientResolverService } from './recipient-resolver.service';
 import { MessageContentResolverService } from './message-content-resolver.service';
 import { MessageMedia } from 'whatsapp-web.js';
+import { ClientState } from '../interfaces/client-state.interface';
 
 interface MessageResult {
-    recipient: string;
-    status: string;
-    error?: string;
-    warning?: string;
+  recipient: string;
+  status: 'sent' | 'failed' | 'likely_sent' | 'skipped';
+  error?: string;
+  warning?: string;
+  messageId?: string;
+}
+
+interface SendProgress {
+  total: number;
+  completed: number;
+  successful: number;
+  failed: number;
+  currentBatch: number;
 }
 
 @Injectable()
 export class MessageSenderService {
-    private readonly logger = new Logger(MessageSenderService.name);
+  private readonly logger = new Logger(MessageSenderService.name);
 
-    constructor(
-        private readonly sessionManager: SessionManagerService,
-        private readonly recipientResolver: RecipientResolverService,
-        private readonly contentResolver: MessageContentResolverService,
-    ) { }
+  // Known whatsapp-web.js errors that indicate successful send
+  private readonly KNOWN_SUCCESS_ERRORS = [
+    'getMessageModel',
+    'serialize',
+    'Cannot read properties of undefined',
+    'msg.serialize is not a function',
+    'Cannot read property \'serialize\'',
+  ];
 
-    async sendMessage(
-  clientId: string,
-  to: string[],
-  message?: string,
-  delayMs: number = 3000,
-  photo?: Express.Multer.File
-): Promise<{ message: string; results: MessageResult[]; photoSent?: boolean }> {
-  const clientState = this.sessionManager.getClientState(clientId);
-  this.logger.debug(`sendMessage - ClientState for ${clientId}`);
+  constructor(
+    private readonly sessionManager: SessionManagerService,
+    private readonly recipientResolver: RecipientResolverService,
+    private readonly contentResolver: MessageContentResolverService,
+  ) { }
 
-  if (!clientState?.client) {
-    throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
-  }
+  async sendMessage(
+    clientId: string,
+    to: string[],
+    message?: string,
+    delayMs: number = 3000,
+    photo?: Express.Multer.File
+  ): Promise<{ message: string; results: MessageResult[]; photoSent?: boolean; summary: SendProgress }> {
+    const clientState = this.sessionManager.getClientState(clientId);
 
-  if (clientState.isSending) {
-    throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
-  }
-
-  await this.validateClientConnection(clientState, clientId);
-
-  this.sessionManager.updateClientState(clientId, {
-    isSending: true,
-    lastActivity: Date.now()
-  });
-
-  try {
-    // ✅ Ensure that if no photo is provided, message must exist
-    if (!photo && (!message || message.trim() === '')) {
-      throw new HttpException('Either message or photo must be provided.', HttpStatus.BAD_REQUEST);
+    if (!clientState?.client) {
+      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
     }
 
-    // 🔄 Resolve message only if it exists
-    const resolvedContent = message
-      ? await this.contentResolver.resolveContent(message, clientId)
-      : ''; // Optional message with photo
-
-    const resolvedTo = await this.recipientResolver.resolveRecipients(to, clientId);
-
-    if (resolvedTo.length === 0) {
-      return { message: 'No valid recipients found', results: [] };
+    if (clientState.isSending) {
+      throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    let results: MessageResult[];
+    await this.validateClientConnection(clientState, clientId);
 
-    if (photo) {
-      results = await this.sendToRecipientsWithPhoto(
-        clientState,
-        resolvedTo,
-        resolvedContent, // May be empty
-        photo,
-        delayMs
-      );
-      return { message: 'Messages sent with photo', results, photoSent: true };
-    } else {
-      results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs);
-      return { message: 'Messages sent', results };
+    this.sessionManager.updateClientState(clientId, {
+      isSending: true,
+      lastActivity: Date.now()
+    });
+
+    try {
+      // ✅ Validate input
+      if (!photo && (!message || message.trim() === '')) {
+        throw new HttpException('Either message or photo must be provided.', HttpStatus.BAD_REQUEST);
+      }
+
+      // ✅ Resolve content and recipients
+      const resolvedContent = message ? await this.contentResolver.resolveContent(message, clientId) : '';
+      const resolvedTo = await this.recipientResolver.resolveRecipients(to, clientId);
+
+      if (resolvedTo.length === 0) {
+        return {
+          message: 'No valid recipients found',
+          results: [],
+          summary: { total: 0, completed: 0, successful: 0, failed: 0, currentBatch: 0 }
+        };
+      }
+
+      this.logger.log(`📤 Starting to send ${photo ? 'photo' : 'text'} messages to ${resolvedTo.length} recipients`);
+
+      let results: MessageResult[];
+      const summary: SendProgress = {
+        total: resolvedTo.length,
+        completed: 0,
+        successful: 0,
+        failed: 0,
+        currentBatch: 0
+      };
+
+      if (photo) {
+        results = await this.sendToRecipientsWithPhoto(clientState, resolvedTo, resolvedContent, photo, delayMs, summary);
+        return {
+          message: `Messages sent with photo: ${summary.successful}/${summary.total} successful`,
+          results,
+          photoSent: true,
+          summary
+        };
+      } else {
+        results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary);
+        return {
+          message: `Messages sent: ${summary.successful}/${summary.total} successful`,
+          results,
+          summary
+        };
+      }
+
+    } finally {
+      this.sessionManager.updateClientState(clientId, { isSending: false });
     }
-
-  } finally {
-    this.sessionManager.updateClientState(clientId, { isSending: false });
   }
-}
 
+  async sendMessageExcel(
+    clientId: string,
+    data: { messages: { number: string; message: string }[] },
+    delayMs: number = 3000
+  ): Promise<{ message: string; results: MessageResult[]; summary: SendProgress }> {
+    const clientState = this.sessionManager.getClientState(clientId);
 
-    async sendMessageExcel(
-        clientId: string,
-        data: { messages: { number: string; message: string }[] },
-        delayMs: number = 3000
-    ): Promise<{ message: string; results: MessageResult[] }> {
-        const clientState = this.sessionManager.getClientState(clientId);
+    if (!clientState?.client) {
+      throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
+    }
 
-        if (!clientState?.client) {
-            throw new HttpException('Session not found. Please start a new session.', HttpStatus.NOT_FOUND);
-        }
+    if (clientState.isSending) {
+      throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
+    }
 
-        if (clientState.isSending) {
-            throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
-        }
+    await this.validateClientConnection(clientState, clientId);
 
-        await this.validateClientConnection(clientState, clientId);
+    this.sessionManager.updateClientState(clientId, {
+      isSending: true,
+      lastActivity: Date.now()
+    });
 
-        this.sessionManager.updateClientState(clientId, {
-            isSending: true,
-            lastActivity: Date.now()
-        });
+    try {
+      const allResults: MessageResult[] = [];
+      const totalMessages = data.messages.length;
+      let completed = 0;
+      let successful = 0;
 
+      this.logger.log(`📊 Starting bulk send to ${totalMessages} recipients`);
+
+      for (const { number, message } of data.messages) {
         try {
-            const allResults: MessageResult[] = [];
-            for (const { number, message } of data.messages) {
-                try {
-                    const resolvedTo = await this.recipientResolver.resolveRecipients([number], clientId);
-                    if (resolvedTo.length === 0) {
-                        allResults.push({ recipient: number, status: 'failed', error: 'No valid recipient' });
-                        continue;
-                    }
+          const resolvedTo = await this.recipientResolver.resolveRecipients([number], clientId);
 
-                    const resolvedContent = await this.contentResolver.resolveContent(message, clientId);
-                    const results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs);
-                    allResults.push(...results);
-                } catch (error) {
-                    allResults.push({ recipient: number, status: 'failed', error: error.message });
-                }
-            }
+          if (resolvedTo.length === 0) {
+            allResults.push({
+              recipient: number,
+              status: 'skipped',
+              error: 'No valid recipient found'
+            });
+            completed++;
+            continue;
+          }
 
-            const successCount = allResults.filter(r => r.status === 'sent').length;
-            const failedCount = allResults.length - successCount;
-            const summaryMessage = `Bulk send completed: ${successCount} success, ${failedCount} failed`;
-            this.logger.log(`📊 ${summaryMessage}`);
-            return { message: summaryMessage, results: allResults };
-        } finally {
-            this.sessionManager.updateClientState(clientId, { isSending: false });
-        }
-    }
+          const resolvedContent = await this.contentResolver.resolveContent(message, clientId);
+          const summary: SendProgress = { total: 1, completed: 0, successful: 0, failed: 0, currentBatch: 0 };
 
-    private async validateClientConnection(clientState: any, clientId: string): Promise<void> {
-        if (!clientState.isReady) {
-            throw new HttpException('WhatsApp client is not ready. Please wait for initialization.', HttpStatus.SERVICE_UNAVAILABLE);
-        }
+          const results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary);
+          allResults.push(...results);
 
-        let state;
-        try {
-            state = await clientState.client.getState();
+          if (results[0]?.status === 'sent' || results[0]?.status === 'likely_sent') {
+            successful++;
+          }
+
         } catch (error) {
-            throw new HttpException('Client state unavailable. Session may be disconnected.', HttpStatus.SERVICE_UNAVAILABLE);
-        }
-
-        // if (state !== 'CONNECTED') {
-        //     throw new HttpException('Client could not reconnect to WhatsApp.', HttpStatus.UNAUTHORIZED);
-        // }
-    }
-
-    private async sendToRecipients(
-  clientState: any,
-  recipients: string[],
-  content: string,
-  delayMs: number
-): Promise<MessageResult[]> {
-  const results: MessageResult[] = [];
-  const batchSize = 5;
-
-  for (let i = 0; i < recipients.length; i += batchSize) {
-    const batch = recipients.slice(i, i + batchSize);
-
-    const batchPromises = batch.map(async (recipient, batchIndex) => {
-      try {
-        const cleanedRecipient = recipient.replace(/\D/g, '');
-        const chatId = `${cleanedRecipient}@c.us`;
-
-        await clientState.client.sendMessage(chatId, content);
-        results.push({ recipient, status: 'sent' });
-        this.sessionManager.updateClientState(clientState.client.options.authStrategy.clientId, {
-          lastActivity: Date.now()
-        });
-      } catch (error) {
-        this.logger.error(`❌ Failed to send to ${recipient}: ${error.message}`);
-        results.push({ recipient, status: 'failed', error: error.message });
-      }
-    });
-
-    await Promise.allSettled(batchPromises);
-
-    if (i + batchSize < recipients.length) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-  }
-
-  this.logger.debug(`sendToRecipients results: ${JSON.stringify(results, null, 2)}`);
-  return results;
-}
-
-private async sendToRecipientsWithPhoto(
-  clientState: any,
-  recipients: string[],
-  caption: string,
-  photo: Express.Multer.File,
-  delayMs: number
-): Promise<MessageResult[]> {
-  const results: MessageResult[] = [];
-  const batchSize = 5;
-
-  for (let i = 0; i < recipients.length; i += batchSize) {
-    const batch = recipients.slice(i, i + batchSize);
-
-    const batchPromises = batch.map(async (recipient, batchIndex) => {
-      try {
-        const cleanedRecipient = recipient.replace(/\D/g, '');
-        const chatId = `${cleanedRecipient}@c.us`;
-        const media = new MessageMedia(
-          photo.mimetype,
-          photo.buffer.toString('base64'),
-          photo.originalname
-        );
-
-        await clientState.client.sendMessage(chatId, media, { caption });
-
-        results.push({ recipient, status: 'sent' });
-
-        this.sessionManager.updateClientState(
-          clientState.client.options.authStrategy.clientId,
-          { lastActivity: Date.now() }
-        );
-
-      } catch (error: any) {
-        const knownSerializeError =
-          error?.message?.includes("getMessageModel") ||
-          error?.message?.includes("serialize");
-
-        if (knownSerializeError) {
-          this.logger.warn(
-            `⚠️ Message likely sent, but confirmation failed for ${recipient}: ${error.message}`
-          );
-          results.push({
-            recipient,
-            status: 'sent_with_warning',
-            warning: 'Sent but confirmation failed'
+          this.logger.error(`❌ Error processing message for ${number}: ${error.message}`);
+          allResults.push({
+            recipient: number,
+            status: 'failed',
+            error: error.message
           });
-        } else {
-          this.logger.error(`❌ Failed to send photo to ${recipient}: ${error.message}`);
-          results.push({ recipient, status: 'failed', error: error.message });
+        }
+
+        completed++;
+
+        // Log progress every 10 messages
+        if (completed % 10 === 0) {
+          this.logger.log(`📊 Bulk send progress: ${completed}/${totalMessages} (${successful} successful)`);
         }
       }
-    });
 
-    await Promise.allSettled(batchPromises);
+      const failed = completed - successful;
+      const summaryMessage = `Bulk send completed: ${successful} successful, ${failed} failed out of ${totalMessages} total`;
 
-    if (i + batchSize < recipients.length) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      this.logger.log(`📊 ${summaryMessage}`);
+
+      return {
+        message: summaryMessage,
+        results: allResults,
+        summary: {
+          total: totalMessages,
+          completed,
+          successful,
+          failed,
+          currentBatch: 0
+        }
+      };
+    } finally {
+      this.sessionManager.updateClientState(clientId, { isSending: false });
     }
   }
 
-  this.logger.debug(`sendToRecipientsWithPhoto results: ${JSON.stringify(results, null, 2)}`);
-  return results;
-}
-
-
-    private formatChatId(recipient: string): string {
-        let cleanedRecipient = recipient.startsWith('+') ? recipient.slice(1) : recipient;
-        cleanedRecipient = cleanedRecipient.split('@')[0];
-
-        if (!/^\d+$/.test(cleanedRecipient)) {
-            throw new Error(`Invalid phone number format: ${cleanedRecipient}`);
-        }
-
-        return `${cleanedRecipient}@c.us`;
+  private async validateClientConnection(clientState: any, clientId: string): Promise<void> {
+    if (!clientState.isReady) {
+      throw new HttpException('WhatsApp client is not ready. Please wait for initialization.', HttpStatus.SERVICE_UNAVAILABLE);
     }
+
+    try {
+      const state = await clientState.client.getState();
+      this.logger.debug(`🔍 Client ${clientId} state: ${state}`);
+
+      // Allow CONNECTED, OPENING, or similar states
+      if (!['CONNECTED', 'OPENING'].includes(state)) {
+        this.logger.warn(`⚠️ Client ${clientId} state is ${state}, but proceeding`);
+      }
+    } catch (error) {
+      this.logger.warn(`⚠️ Could not get client state for ${clientId}: ${error.message}`);
+      // Don't throw here, as state check might fail but sending might still work
+    }
+  }
+
+  private async sendToRecipients(
+    clientState: any,
+    recipients: string[],
+    content: string,
+    delayMs: number,
+    summary: SendProgress
+  ): Promise<MessageResult[]> {
+    const results: MessageResult[] = [];
+    const batchSize = 3; // Reduced batch size for better reliability
+    const totalBatches = Math.ceil(recipients.length / batchSize);
+
+    for (let i = 0; i < recipients.length; i += batchSize) {
+      const batch = recipients.slice(i, i + batchSize);
+      const currentBatch = Math.floor(i / batchSize) + 1;
+      summary.currentBatch = currentBatch;
+
+      this.logger.debug(`📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
+
+      const batchPromises = batch.map(async (recipient) => {
+        return await this.sendSingleMessage(clientState, recipient, content);
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+          if (result.value.status === 'sent' || result.value.status === 'likely_sent') {
+            summary.successful++;
+          } else {
+            summary.failed++;
+          }
+        } else {
+          results.push({
+            recipient: batch[index],
+            status: 'failed',
+            error: result.reason?.message || 'Unknown error'
+          });
+          summary.failed++;
+        }
+        summary.completed++;
+      });
+
+      // Update session activity
+      this.sessionManager.updateClientState(clientState.client.options.authStrategy.clientId, {
+        lastActivity: Date.now()
+      });
+
+      // Wait between batches
+      if (i + batchSize < recipients.length) {
+        this.logger.debug(`⏳ Waiting ${delayMs}ms before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return results;
+  }
+
+  private async sendToRecipientsWithPhoto(
+    clientState: any,
+    recipients: string[],
+    caption: string,
+    photo: Express.Multer.File,
+    delayMs: number,
+    summary: SendProgress
+  ): Promise<MessageResult[]> {
+    const results: MessageResult[] = [];
+    const batchSize = 2; // Smaller batch for photos
+    const totalBatches = Math.ceil(recipients.length / batchSize);
+
+    // Prepare media once
+    const media = new MessageMedia(
+      photo.mimetype,
+      photo.buffer.toString('base64'),
+      photo.originalname
+    );
+
+    for (let i = 0; i < recipients.length; i += batchSize) {
+      const batch = recipients.slice(i, i + batchSize);
+      const currentBatch = Math.floor(i / batchSize) + 1;
+      summary.currentBatch = currentBatch;
+
+      this.logger.debug(`📦 Processing photo batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
+
+      const batchPromises = batch.map(async (recipient) => {
+        return await this.sendSinglePhotoMessage(clientState, recipient, media, caption);
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+          if (result.value.status === 'sent' || result.value.status === 'likely_sent') {
+            summary.successful++;
+          } else {
+            summary.failed++;
+          }
+        } else {
+          results.push({
+            recipient: batch[index],
+            status: 'failed',
+            error: result.reason?.message || 'Unknown error'
+          });
+          summary.failed++;
+        }
+        summary.completed++;
+      });
+
+      // Update session activity
+      this.sessionManager.updateClientState(
+        clientState.client.options.authStrategy.clientId,
+        { lastActivity: Date.now() }
+      );
+
+      // Wait between batches (longer for photos)
+      if (i + batchSize < recipients.length) {
+        const photoDelay = Math.max(delayMs, 5000); // Minimum 5s for photos
+        this.logger.debug(`⏳ Waiting ${photoDelay}ms before next photo batch...`);
+        await new Promise(resolve => setTimeout(resolve, photoDelay));
+      }
+    }
+
+    return results;
+  }
+
+  private async sendSingleMessage(clientState: ClientState, recipient: string, content: string): Promise<MessageResult> {
+    try {
+      const cleanedRecipient = recipient.replace(/\D/g, '');
+      const chatId = `${cleanedRecipient}@c.us`;
+
+      this.logger.debug(`📤 Sending message to ${recipient}`);
+
+      const messageResult = await clientState.client.sendMessage(chatId, content, { sendSeen: true, });
+
+      return {
+        recipient,
+        status: 'sent',
+        messageId: messageResult?.id?.id || 'unknown'
+      };
+
+    } catch (error: any) {
+      return this.handleSendError(recipient, error);
+    }
+  }
+
+  private async sendSinglePhotoMessage(
+    clientState: any,
+    recipient: string,
+    media: MessageMedia,
+    caption: string
+  ): Promise<MessageResult> {
+    try {
+      const cleanedRecipient = recipient.replace(/\D/g, '');
+      const chatId = `${cleanedRecipient}@c.us`;
+
+      this.logger.debug(`📤 Sending photo message to ${recipient}`);
+
+      const messageResult = await clientState.client.sendMessage(chatId, media, { caption });
+
+      return {
+        recipient,
+        status: 'sent',
+        messageId: messageResult?.id?.id || 'unknown'
+      };
+
+    } catch (error: any) {
+      return this.handleSendError(recipient, error);
+    }
+  }
+
+  private handleSendError(recipient: string, error: any): MessageResult {
+    const errorMessage = error?.message || 'Unknown error';
+
+    // ✅ Check for known "success" errors (message sent but confirmation failed)
+    const isKnownSuccessError = this.KNOWN_SUCCESS_ERRORS.some(knownError =>
+      errorMessage.includes(knownError)
+    );
+
+    if (isKnownSuccessError) {
+      this.logger.warn(`⚠️ Message likely sent to ${recipient}, but confirmation failed: ${errorMessage}`);
+      return {
+        recipient,
+        status: 'likely_sent',
+        warning: 'Message likely sent but confirmation failed due to WhatsApp Web JS limitation'
+      };
+    }
+
+    // Check for other common recoverable errors
+    if (errorMessage.includes('Rate limit') || errorMessage.includes('too many')) {
+      this.logger.warn(`🚫 Rate limited for ${recipient}: ${errorMessage}`);
+      return {
+        recipient,
+        status: 'failed',
+        error: 'Rate limited - try again later'
+      };
+    }
+
+    // Unknown error
+    this.logger.error(`❌ Failed to send to ${recipient}: ${errorMessage}`);
+    return {
+      recipient,
+      status: 'failed',
+      error: errorMessage
+    };
+  }
+
+  private formatChatId(recipient: string): string {
+    let cleanedRecipient = recipient.startsWith('+') ? recipient.slice(1) : recipient;
+    cleanedRecipient = cleanedRecipient.split('@')[0];
+
+    if (!/^\d+$/.test(cleanedRecipient)) {
+      throw new Error(`Invalid phone number format: ${cleanedRecipient}`);
+    }
+
+    return `${cleanedRecipient}@c.us`;
+  }
 }

@@ -172,12 +172,14 @@ private async handleClientReady(
     // ✅ Fetch all WhatsApp contacts
 const allContacts = await client.getContacts();
 
-// ✅ Strictly filter saved contacts
 const savedContacts = allContacts.filter((c) =>
-    c.isMyContact &&                        // Saved in address book
-    c.isUser &&                             // Is a WhatsApp user
-    c.id && c.id.user &&                    // Has valid ID
-    /^\d{7,15}$/.test(c.id.user)            // Number looks real (7-15 digits)
+  c.isMyContact &&                           // ✅ Saved in address book
+  c.isUser &&                                // ✅ Real WhatsApp user
+  !c.isGroup &&                              // ✅ Not a group
+  c.id && c.id.user &&                       // ✅ Has valid ID
+  /^\d{7,15}$/.test(c.id.user) &&            // ✅ Valid phone number format
+  !/[^\d]/.test(c.id.user) &&                // ✅ No non-digit characters
+  !c.id._serialized.includes('@broadcast')   // ✅ No broadcast/status JIDs
 );
 
 const seenNumbers = new Set<string>();

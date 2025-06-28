@@ -5,7 +5,7 @@ import { IsValidPhoneNumbers } from "src/validators/is-valid-phone-numbers.valid
 export class NewMessageDto {
   @IsArray({ message: 'to must be an array of phone numbers' })
   @IsNotEmpty({ message: 'to array is required and cannot be empty' })
-  @Validate(IsValidPhoneNumbers, { message: 'Invalid phone numbers' })
+  // @Validate(IsValidPhoneNumbers, { message: 'Invalid phone numbers' })
   to: string[];
 
   @IsString({ message: 'message must be a string' })

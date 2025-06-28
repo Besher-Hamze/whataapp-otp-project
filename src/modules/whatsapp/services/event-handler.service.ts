@@ -1,6 +1,7 @@
 // src/whatsapp/services/event-handler.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { Client, Message } from 'whatsapp-web.js';
+import { Client, Message , Contact} from 'whatsapp-web.js';
+import * as libphonenumber from 'libphonenumber-js'; // Import libphonenumber-js
 import { QRCodeService } from './qr-code.service';
 import { MessageHandlerService } from './message-handler.service';
 import { SessionManagerService } from './session-manager.service';
@@ -12,6 +13,7 @@ import { Model } from 'mongoose';
 import { Account, AccountDocument } from 'src/modules/accounts/schema/account.schema';
 import { ContactsService } from '../../contacts/contacts.service';
 import { CreateContactDto } from 'src/modules/contacts/dto/create-contact.dto';
+import { lengthLimits } from '../interfaces/numbers.interface';
 
 interface SessionState {
     isHandlingLogout: boolean;
@@ -23,10 +25,11 @@ interface SessionState {
 
 @Injectable()
 export class EventHandlerService {
-    private readonly logger = new Logger(EventHandlerService.name);
+        private readonly logger = new Logger(EventHandlerService.name);
     private readonly sessionStates = new Map<string, SessionState>();
-
-    constructor(
+        private readonly validCountryCodes = new Set(['+1', '+20', '+33', '+34', '+39', '+41', '+43', '+44', '+45', '+46', '+47', '+48', '+49', '+51', '+52', '+53', '+54', '+55', '+56', '+57', '+58', '+60', '+61', '+62', '+63', '+64', '+65', '+66', '+81', '+82', '+84', '+86', '+90', '+91', '+92', '+93', '+94', '+95', '+98', '+212', '+213', '+216', '+218', '+220', '+221', '+222', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+230', '+231', '+232', '+233', '+234', '+235', '+236', '+237', '+238', '+239', '+240', '+241', '+242', '+243', '+244', '+245', '+246', '+247', '+248', '+249', '+250', '+251', '+252', '+253', '+254', '+255', '+256', '+257', '+258', '+260', '+261', '+262', '+263', '+264', '+265', '+266', '+267', '+268', '+269', '+290', '+291', '+297', '+298', '+299', '+350', '+351', '+352', '+353', '+354', '+355', '+356', '+357', '+358', '+359', '+370', '+371', '+372', '+373', '+374', '+375', '+376', '+377', '+378', '+379', '+380', '+381', '+382', '+383', '+385', '+386', '+387', '+389', '+420', '+421', '+423', '+500', '+501', '+502', '+503', '+504', '+505', '+506', '+507', '+508', '+509', '+590', '+591', '+592', '+593', '+594', '+595', '+596', '+597', '+598', '+599', '+670', '+671', '+672', '+673', '+674', '+675', '+676', '+677', '+678', '+679', '+680', '+681', '+682', '+683', '+685', '+686', '+687', '+688', '+689', '+690', '+691', '+692', '+850', '+852', '+853', '+855', '+856', '+870', '+880', '+886', '+960', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+972', '+973', '+974', '+975', '+976', '+977', '+992', '+993', '+994', '+995', '+996', '+998']);
+    
+        constructor(
         private readonly qrCodeService: QRCodeService,
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
         private readonly messageHandler: MessageHandlerService,
@@ -234,88 +237,83 @@ export class EventHandlerService {
         await this.sessionManager.saveSessionState(clientId);
         const isRestored = this.sessionManager.isRestoredSession(clientId);
 
-        // ✅ Log session readiness with message handler info
-        this.logger.log(`✅ Client ${clientId} ready - Message handlers: ${this.messageHandler.getHandlerCount()}, Session time: ${new Date(sessionState.startTime).toISOString()}`);
+const allContacts = await client.getContacts();
 
-        // ✅ Handle contacts (with error handling to not block session)
-        try {
-            await this.syncContacts(client, accountId, clientId);
-        } catch (error) {
-            this.logger.warn(`⚠️ Contact sync failed for ${clientId}: ${error.message}`);
-            // Don't let contact sync failure break the session
+    const savedContacts = allContacts.filter((contact: Contact) => {
+      if (!contact.id || !contact.id._serialized || !contact.id.user) return false;
+
+      const jid = contact.id._serialized;
+      const rawNumber = contact.id.user;
+
+      // Basic checks
+      if (!contact.isMyContact || !contact.isUser || contact.isGroup || jid.includes('@broadcast')) {
+        return false;
+      }
+
+      // Validate phone number using libphonenumber
+      try {
+        const phoneNumber = libphonenumber.parsePhoneNumberFromString(`+${rawNumber}`);
+        if (!phoneNumber) return false;
+
+        const countryCode = `+${phoneNumber.countryCallingCode}`;
+        if (!this.validCountryCodes.has(countryCode)) return false;
+
+        // Enforce country-specific length limits
+        const nationalNumber = phoneNumber.nationalNumber.toString();
+
+        const limits = lengthLimits[countryCode];
+        if (nationalNumber.length < limits[0] || nationalNumber.length > limits[1]) {
+        this.logger.debug(`Rejected ${rawNumber}: National number length ${nationalNumber.length} outside ${limits[0]}-${limits[1]}`);
+        return false;
         }
 
-        // ✅ Emit ready event with comprehensive data
-        emit('ready', {
-            phoneNumber,
-            name,
-            clientId,
-            accountId,
-            status: 'active',
-            isRestored,
-            sessionStartTime: sessionState.startTime,
-            messageHandlers: this.messageHandler.getHandlerCount(),
-            message: isRestored
-                ? 'WhatsApp session restored successfully.'
-                : 'WhatsApp client ready and account saved/updated.',
-        });
 
-        this.logger.log(`🎉 Client ${clientId} is fully ready (${isRestored ? 'restored' : 'new'} session)`);
+        return phoneNumber.isValid();
+      } catch (e) {
+        this.logger.debug(`Rejected ${rawNumber}: Invalid format - ${e.message}`);
+        return false;
+      }
+    });
+
+    // Deduplicate and save contacts
+    const seenNumbers = new Set<string>();
+    for (const contact of savedContacts) {
+      const rawNumber = contact.id.user;
+      const phoneNumber = `+${rawNumber}`;
+      if (seenNumbers.has(phoneNumber)) continue;
+      seenNumbers.add(phoneNumber);
+
+      const displayName = contact.name || contact.pushname || 'Unnamed';
+
+      const createContactDto: CreateContactDto = {
+        name: displayName,
+        phone_number: phoneNumber,
+        account: accountId,
+      };
+
+      try {
+        await this.contactService.create(createContactDto, accountId);
+        this.logger.log(`[EventHandlerService] Created new contact: ${displayName} (${phoneNumber}) for account ${accountId}`);
+      } catch (err) {
+        this.logger.warn(`⚠️ Skipped contact ${phoneNumber}: ${err.message}`);
+      }
     }
 
-    private async syncContacts(client: Client, accountId: string, clientId: string): Promise<void> {
-        try {
-            this.logger.log(`📇 Starting contact sync for ${clientId}...`);
+    emit('ready', {
+        phoneNumber,
+        name,
+        clientId,
+        status: 'active',
+        isRestored,
+        message: isRestored
+            ? 'WhatsApp session restored successfully.'
+            : 'WhatsApp client ready and account saved/updated.',
+    });
 
-            const allContacts = await client.getContacts();
-            const validContacts = allContacts.filter((c) =>
-                c.isMyContact &&
-                c.isUser &&
-                !c.isGroup &&
-                c.id && c.id.user &&
-                /^\d{7,15}$/.test(c.id.user) &&
-                !/[^\d]/.test(c.id.user) &&
-                !c.id._serialized.includes('@broadcast')
-            );
+    this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
+}
 
-            this.logger.log(`📇 Found ${validContacts.length} valid contacts to sync for ${clientId}`);
 
-            const seenNumbers = new Set<string>();
-            let syncedCount = 0;
-            let skippedCount = 0;
-
-            for (const contact of validContacts) {
-                try {
-                    const rawNumber = contact.id.user;
-                    const phoneNumber = '+' + rawNumber;
-
-                    if (seenNumbers.has(phoneNumber)) {
-                        skippedCount++;
-                        continue;
-                    }
-                    seenNumbers.add(phoneNumber);
-
-                    const displayName = contact.name || contact.pushname || 'Unnamed';
-                    const createContactDto: CreateContactDto = {
-                        name: displayName,
-                        phone_number: phoneNumber,
-                        account: accountId,
-                    };
-
-                    await this.contactService.create(createContactDto, accountId);
-                    syncedCount++;
-                } catch (err) {
-                    this.logger.debug(`⚠️ Skipped contact ${contact.id?.user}: ${err.message}`);
-                    skippedCount++;
-                }
-            }
-
-            this.logger.log(`📇 Contact sync completed for ${clientId}: ${syncedCount} synced, ${skippedCount} skipped`);
-        } catch (error) {
-            this.logger.error(`❌ Contact sync error for ${clientId}: ${error.message}`);
-            throw error; // Let the caller handle this
-        }
-    }
 
     private async handleClientDisconnected(
         client: Client,

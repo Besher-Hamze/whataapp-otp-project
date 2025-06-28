@@ -235,7 +235,7 @@ export class MessageSenderService {
     summary: SendProgress
   ): Promise<MessageResult[]> {
     const results: MessageResult[] = [];
-    const batchSize = 3; // Reduced batch size for better reliability
+    const batchSize = 1; // Reduced batch size for better reliability
     const totalBatches = Math.ceil(recipients.length / batchSize);
 
     for (let i = 0; i < recipients.length; i += batchSize) {
@@ -398,7 +398,8 @@ export class MessageSenderService {
 
       this.logger.debug(`📤 Sending message to ${recipient}`);
 
-      const messageResult = await clientState.client.sendMessage(chatId, content, { sendSeen: true, });
+      const UniqContent = `${content} \n To : ${recipient}`;
+      const messageResult = await clientState.client.sendMessage(chatId, UniqContent, { sendSeen: false });
 
       return {
         recipient,
@@ -422,8 +423,9 @@ export class MessageSenderService {
       const chatId = `${cleanedRecipient}@c.us`;
 
       this.logger.debug(`📤 Sending photo message to ${recipient}`);
+      const UniqContent = `${caption} \n To : ${recipient}`;
 
-      const messageResult = await clientState.client.sendMessage(chatId, media, { caption });
+      const messageResult = await clientState.client.sendMessage(chatId, media, { caption: UniqContent, sendSeen: false });
 
       return {
         recipient,

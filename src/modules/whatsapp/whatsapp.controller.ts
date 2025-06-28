@@ -209,7 +209,7 @@ export class WhatsAppController {
       }
 
       // Validate delay parameter
-      let messageDelay = 5000; // Default 5 seconds
+      let messageDelay = 30000; // Default 5 seconds
       if (delay !== undefined) {
         const parsedDelay = parseInt(delay.toString(), 10);
         if (isNaN(parsedDelay)) {

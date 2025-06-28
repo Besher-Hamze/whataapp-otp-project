@@ -327,7 +327,7 @@ export class MessageSenderService {
     summary: SendProgress
   ): Promise<MessageResult[]> {
     const results: MessageResult[] = [];
-    const batchSize = 2; // Smaller batch for all file types
+    const batchSize = 1; // Smaller batch for all file types
     const totalBatches = Math.ceil(recipients.length / batchSize);
 
     const mimeType = mime.lookup(file.originalname) || 'application/octet-stream'; // Fallback to generic type

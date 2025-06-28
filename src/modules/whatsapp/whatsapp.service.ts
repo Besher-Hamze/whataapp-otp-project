@@ -74,11 +74,11 @@ export class WhatsAppService implements OnModuleInit {
     const userSessions = this.sessionManager.getSessionsForUser(userId);
     if (userSessions.length > 0 && !accountId) {
       const readySession = userSessions.find(sessionId => this.sessionManager.isClientReady(sessionId));
-      if (readySession) {
-        this.logger.log(`✅ Found existing ready session for user: ${readySession}`);
-        this.sessionManager.mapSocketToClient(socketClientId, readySession);
-        return { clientId: readySession };
-      }
+      // if (readySession) {
+      //   this.logger.log(`✅ Found existing ready session for user: ${readySession}`);
+      //   this.sessionManager.mapSocketToClient(socketClientId, readySession);
+      //   return { clientId: readySession };
+      // }
     }
 
     // Prevent duplicate initialization

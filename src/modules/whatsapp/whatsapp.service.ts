@@ -141,7 +141,7 @@ export class WhatsAppService implements OnModuleInit {
     clientId: string,
     to: string[],
     message?: string,
-    delayMs: number = 3000,
+    delayMs: number = 30000,
     photo?: Express.Multer.File
   ): Promise<any> {
     return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo);

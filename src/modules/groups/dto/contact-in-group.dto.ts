@@ -6,8 +6,8 @@ export class ContactInGroupDto {
   name: string;
 
   @IsString()
-  @Matches(/^\+\d+$/, {
-    message: 'Phone number must start with + and contain digits only.',
+  @Matches(/^\d+$/, {
+    message: 'Phone number must contain digits only.',
   })
   phone_number: string;
 }

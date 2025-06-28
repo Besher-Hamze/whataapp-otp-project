@@ -27,19 +27,19 @@ export class WhatsAppService implements OnModuleInit {
 
   async onModuleInit() {
     this.logger.log('🚀 WhatsApp Service initializing...');
-    
+
     // Restore existing sessions after a delay to ensure all services are ready
     setTimeout(async () => {
       this.logger.log('🔄 Starting session restoration...');
       await this.sessionRestoration.loadClientsFromSessions();
       this.logger.log(`✅ Session restoration completed. Active sessions: ${this.getActiveSessionCount()}`);
     }, 5000);
-    
+
     // Cleanup inactive sessions every 10 minutes
     setInterval(() => {
       this.cleanupService.cleanupInactiveSessions();
     }, 600000);
-    
+
     this.logger.log('✅ WhatsApp Service initialized successfully');
   }
 
@@ -147,22 +147,22 @@ export class WhatsAppService implements OnModuleInit {
     return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo);
   }
 
- async sendMessageExcel(
-        clientId: string,
-        data: { messages: { number: string; message: string }[] },
-        delayMs: number = 3000
-    ): Promise<any> {
-        try {
-            // Delegate to MessageSenderService with the full data object
-            const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs);
-            return result;
-        } catch (error) {
-            throw new HttpException(
-                error.message || 'Failed to process bulk message request',
-                error.status || HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
+  async sendMessageExcel(
+    clientId: string,
+    data: { messages: { number: string; message: string }[] },
+    delayMs: number = 3000
+  ): Promise<any> {
+    try {
+      // Delegate to MessageSenderService with the full data object
+      const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs);
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message || 'Failed to process bulk message request',
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
+  }
 
   async disconnectClient(socketClientId: string) {
     const clientId = this.sessionManager.getClientIdBySocket(socketClientId);
@@ -226,7 +226,7 @@ export class WhatsAppService implements OnModuleInit {
     if (!clientState) return null;
 
     const sessionStatus = await this.sessionManager.getSessionStatus(clientId);
-    
+
     return {
       clientId,
       isReady: clientState.isReady,
@@ -253,7 +253,7 @@ export class WhatsAppService implements OnModuleInit {
     const allSessions = this.sessionManager.getAllSessions();
     const readySessions = Array.from(allSessions.values()).filter(c => c.isReady);
     const restoredSessions = this.getRestoredSessions();
-    
+
     return {
       status: 'healthy',
       metrics: {

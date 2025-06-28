@@ -7,6 +7,10 @@ import { AuthService } from '../../auth/auth.service';
 import { CleanupService } from './cleanup.service';
 import { SessionManagerService } from './session-manager.service';
 import { Client } from 'whatsapp-web.js';
+import { ContactDocument } from 'src/modules/contacts/schema/contacts.schema';
+import { GroupDocument } from 'src/modules/groups/schema/groups.schema';
+import { RuleDocument } from 'src/modules/rules/schema/rules.schema';
+import { TemplateDocument } from 'src/modules/templates/schema/template.schema';
 
 @Injectable()
 export class AccountService {
@@ -14,6 +18,10 @@ export class AccountService {
 
     constructor(
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
+        @InjectModel(Account.name) private contactModel: Model<ContactDocument>,
+        @InjectModel(Account.name) private groupModel: Model<GroupDocument>,
+        @InjectModel(Account.name) private ruleModel: Model<RuleDocument>,
+        @InjectModel(Account.name) private templateModel: Model<TemplateDocument>,
         private readonly authService: AuthService,
         private readonly cleanupService: CleanupService, // Injected
         private readonly sessionManager: SessionManagerService
@@ -85,14 +93,31 @@ async handleAccountReady(phoneNumber: string, name: string, clientId: string, us
       }
 
     async deleteAccountOnLogout(accountId: string): Promise<void> {
+    try {
         const account = await this.accountModel.findById(accountId).exec();
-        if (account) {
-            const userId = account.user.toString();
-            await this.authService.removeAccountFromTokens(userId, accountId);
-            await this.accountModel.deleteOne({ _id: accountId }).exec();
-            this.logger.log(`✅ Account ${accountId} deleted on logout`);
+        if (!account) {
+            this.logger.warn(`⚠️ Account ${accountId} not found`);
+            return;
         }
+
+        const userId = account.user.toString();
+
+        await this.authService.removeAccountFromTokens(userId, accountId);
+
+        await Promise.all([
+            this.accountModel.deleteOne({ _id: accountId }).exec(),
+            this.contactModel.deleteMany({ accountId }).exec(),
+            this.groupModel.deleteMany({ accountId }).exec(),
+            this.ruleModel.deleteMany({ accountId }).exec(),
+            this.templateModel.deleteMany({ accountId }).exec(),
+        ]);
+
+        this.logger.log(`✅ Deleted account and all related data for ${accountId}`);
+    } catch (error) {
+        this.logger.error(`❌ Error deleting account ${accountId}: ${error.message}`, error.stack);
+        throw error; // Rethrow if you want upstream handling
     }
+}
 
     async getUserAccounts(userId: string): Promise<AccountDocument[]> {
         return await this.accountModel.find({ user: userId }).lean().exec();

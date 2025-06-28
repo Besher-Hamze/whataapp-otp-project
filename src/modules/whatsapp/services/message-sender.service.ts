@@ -4,6 +4,7 @@ import { RecipientResolverService } from './recipient-resolver.service';
 import { MessageContentResolverService } from './message-content-resolver.service';
 import { MessageMedia } from 'whatsapp-web.js';
 import { ClientState } from '../interfaces/client-state.interface';
+import * as mime from 'mime-types';
 
 interface MessageResult {
   recipient: string;
@@ -284,23 +285,61 @@ export class MessageSenderService {
     return results;
   }
 
+  private async sendSingleFileMessage(clientState: any, recipient: string, media: MessageMedia, caption: string, mimeType: string): Promise<MessageResult> {
+    try {
+      const cleanedRecipient = recipient.replace(/\D/g, '');
+      const chatId = `${cleanedRecipient}@c.us`;
+
+      let sendResult;
+      if (mimeType.startsWith('image/')) {
+        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'photo' });
+        this.logger.log(`📸 Sent photo to ${recipient}: ${media.filename}`);
+      } else if (mimeType.startsWith('video/')) {
+        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'video' });
+        this.logger.log(`🎥 Sent video to ${recipient}: ${media.filename}`);
+      } else {
+        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'document' });
+        this.logger.log(`📄 Sent document to ${recipient}: ${media.filename}`);
+      }
+
+      return { recipient, status: 'sent' };
+    } catch (error: any) {
+      const knownSerializeError =
+        error?.message?.includes('getMessageModel') ||
+        error?.message?.includes('serialize');
+
+      if (knownSerializeError) {
+        this.logger.warn(`⚠️ File likely sent, but confirmation failed for ${recipient}: ${error.message}`);
+        return { recipient, status: 'likely_sent', warning: 'Sent but confirmation failed' };
+      } else {
+        this.logger.error(`❌ Failed to send file to ${recipient}: ${error.message}`);
+        return { recipient, status: 'failed', error: error.message };
+      }
+    }
+  }
+  
   private async sendToRecipientsWithPhoto(
     clientState: any,
     recipients: string[],
     caption: string,
-    photo: Express.Multer.File,
+    file: Express.Multer.File,
     delayMs: number,
     summary: SendProgress
   ): Promise<MessageResult[]> {
     const results: MessageResult[] = [];
-    const batchSize = 2; // Smaller batch for photos
+    const batchSize = 1; // Smaller batch for all file types
     const totalBatches = Math.ceil(recipients.length / batchSize);
+
+    const mimeType = mime.lookup(file.originalname) || 'application/octet-stream'; // Fallback to generic type
+    if (!mimeType) {
+      this.logger.warn(`Unable to determine MIME type for ${file.originalname}, using application/octet-stream`);
+    }
 
     // Prepare media once
     const media = new MessageMedia(
-      photo.mimetype,
-      photo.buffer.toString('base64'),
-      photo.originalname
+      mimeType,
+      file.buffer.toString('base64'),
+      file.originalname
     );
 
     for (let i = 0; i < recipients.length; i += batchSize) {
@@ -308,10 +347,10 @@ export class MessageSenderService {
       const currentBatch = Math.floor(i / batchSize) + 1;
       summary.currentBatch = currentBatch;
 
-      this.logger.debug(`📦 Processing photo batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
+      this.logger.debug(`📦 Processing file batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
-        return await this.sendSinglePhotoMessage(clientState, recipient, media, caption);
+        return await this.sendSingleFileMessage(clientState, recipient, media, caption, mimeType);
       });
 
       const batchResults = await Promise.allSettled(batchPromises);
@@ -341,11 +380,11 @@ export class MessageSenderService {
         { lastActivity: Date.now() }
       );
 
-      // Wait between batches (longer for photos)
+      // Wait between batches (minimum 5s for files)
       if (i + batchSize < recipients.length) {
-        const photoDelay = Math.max(delayMs, 5000); // Minimum 5s for photos
-        this.logger.debug(`⏳ Waiting ${photoDelay}ms before next photo batch...`);
-        await new Promise(resolve => setTimeout(resolve, photoDelay));
+        const fileDelay = Math.max(delayMs, 5000); // Minimum 5s for files
+        this.logger.debug(`⏳ Waiting ${fileDelay}ms before next file batch...`);
+        await new Promise(resolve => setTimeout(resolve, fileDelay));
       }
     }
 

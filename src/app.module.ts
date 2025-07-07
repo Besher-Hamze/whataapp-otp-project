@@ -19,6 +19,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { RateLimitInterceptor } from './common/interceptors/rate-limit.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { UserSubscription } from './modules/user-subscriptions/schema/user-subscription.schema';
 
 @Module({
   imports: [
@@ -64,7 +65,8 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
     AutoResponderModule,
     TemplatesModule,
     OtpModule,
-    SubscriptionsModule
+    SubscriptionsModule,
+    UserSubscription
   ],
   controllers: [AppController],
   providers: [

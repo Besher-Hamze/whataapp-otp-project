@@ -38,6 +38,7 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log', 'debug'], // Set logging levels
   });
 
+  
   // Security middleware
   app.use(helmet());
   app.use(compression());

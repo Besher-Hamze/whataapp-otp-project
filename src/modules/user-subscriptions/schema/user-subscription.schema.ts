@@ -1,7 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types, Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
+import { Subscription } from '../../subscriptions/schema/subscription.schema';
+import { User } from '../../users/schema/users.schema';
 
-export type UserSubscriptionDocument = UserSubscription & Document;
+export type UserSubscriptionDocument = UserSubscription& Document;
 
 @Schema({ timestamps: true })
 export class UserSubscription {
@@ -9,7 +11,7 @@ export class UserSubscription {
   user: Types.ObjectId;
 
   @Prop({ required: true })
-  name: string; // Plan name
+  name: string;
 
   @Prop({ required: true })
   messageLimit: number;
@@ -23,9 +25,14 @@ export class UserSubscription {
   @Prop({ default: false })
   isCustom: boolean;
 
+  @Prop({ default: 0 })
+  price: number;
+
   @Prop({ enum: ['pending', 'approved', 'rejected'], default: 'pending' })
   status: 'pending' | 'approved' | 'rejected';
 
+  @Prop()
+  approvedAt?: Date;
 
 }
 

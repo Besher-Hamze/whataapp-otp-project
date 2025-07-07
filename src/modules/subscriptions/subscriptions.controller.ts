@@ -1,34 +1,39 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, Delete } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 
 @Controller('subscriptions')
 export class SubscriptionsController {
-  constructor(private readonly subscriptionsService: SubscriptionsService) {}
+  constructor(private readonly subscriptionService: SubscriptionsService) {}
 
   @Post()
-  create(@Body() createSubscriptionDto: CreateSubscriptionDto) {
-    return this.subscriptionsService.create(createSubscriptionDto);
+  create(@Body() createDto: CreateSubscriptionDto) {
+    return this.subscriptionService.create(createDto);
   }
 
   @Get()
   findAll() {
-    return this.subscriptionsService.findAll();
+    return this.subscriptionService.findAll();
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.subscriptionsService.findOne(+id);
+    return this.subscriptionService.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateSubscriptionDto: UpdateSubscriptionDto) {
-    return this.subscriptionsService.update(+id, updateSubscriptionDto);
+  update(@Param('id') id: string, @Body() updateDto: UpdateSubscriptionDto) {
+    return this.subscriptionService.update(id, updateDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.subscriptionsService.remove(+id);
+    return this.subscriptionService.delete(id);
+  }
+
+  @Patch(':id/deactivate')
+  deactivate(@Param('id') id: string) {
+    return this.subscriptionService.deactivate(id);
   }
 }

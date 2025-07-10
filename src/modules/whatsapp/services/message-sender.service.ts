@@ -317,7 +317,7 @@ export class MessageSenderService {
       }
     }
   }
-  
+
   private async sendToRecipientsWithPhoto(
     clientState: any,
     recipients: string[],
@@ -397,8 +397,7 @@ export class MessageSenderService {
       const chatId = `${cleanedRecipient}@c.us`;
 
       this.logger.debug(`📤 Sending message to ${recipient}`);
-
-      const UniqContent = `${content} \n To : ${recipient}`;
+      const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${content}  `;
       const messageResult = await clientState.client.sendMessage(chatId, UniqContent, { sendSeen: false });
 
       return {
@@ -423,8 +422,7 @@ export class MessageSenderService {
       const chatId = `${cleanedRecipient}@c.us`;
 
       this.logger.debug(`📤 Sending photo message to ${recipient}`);
-      const UniqContent = `${caption} \n To : ${recipient}`;
-
+      const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${caption}  `;
       const messageResult = await clientState.client.sendMessage(chatId, media, { caption: UniqContent, sendSeen: false });
 
       return {

@@ -1,34 +1,33 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Patch } from '@nestjs/common';
 import { UserSubscriptionsService } from './user-subscriptions.service';
 import { CreateUserSubscriptionDto } from './dto/create-user-subscription.dto';
-import { UpdateUserSubscriptionDto } from './dto/update-user-subscription.dto';
 
-@Controller('user-subscriptions')
+@Controller('request')
 export class UserSubscriptionsController {
-  constructor(private readonly userSubscriptionsService: UserSubscriptionsService) {}
+  constructor(private readonly service: UserSubscriptionsService) {}
 
   @Post()
-  create(@Body() createUserSubscriptionDto: CreateUserSubscriptionDto) {
-    return this.userSubscriptionsService.create(createUserSubscriptionDto);
+  create(@Body() dto: CreateUserSubscriptionDto) {
+    return this.service.create(dto);
   }
 
   @Get()
   findAll() {
-    return this.userSubscriptionsService.findAll();
+    return this.service.findAll();
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.userSubscriptionsService.findOne(+id);
+  @Get('pending')
+  findPending() {
+    return this.service.findPending();
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateUserSubscriptionDto: UpdateUserSubscriptionDto) {
-    return this.userSubscriptionsService.update(+id, updateUserSubscriptionDto);
+  @Patch(':id/approve')
+  approve(@Param('id') id: string) {
+    return this.service.approve(id);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.userSubscriptionsService.remove(+id);
+  delete(@Param('id') id: string) {
+    return this.service.delete(id);
   }
 }

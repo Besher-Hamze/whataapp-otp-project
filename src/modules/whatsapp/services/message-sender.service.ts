@@ -350,7 +350,8 @@ export class MessageSenderService {
       this.logger.debug(`📦 Processing file batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
-        return await this.sendSingleFileMessage(clientState, recipient, media, caption, mimeType);
+        const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${caption}  `;
+        return await this.sendSingleFileMessage(clientState, recipient, media, UniqContent, mimeType);
       });
 
       const batchResults = await Promise.allSettled(batchPromises);

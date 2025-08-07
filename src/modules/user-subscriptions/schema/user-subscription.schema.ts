@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 import { Subscription } from '../../subscriptions/schema/subscription.schema';
 import { User } from '../../users/schema/users.schema';
+import { SubscriptionStatus } from 'src/common/enum/subsription_status';
 
 export type UserSubscriptionDocument = UserSubscription& Document;
 
@@ -28,8 +29,8 @@ export class UserSubscription {
   @Prop({ default: 0 })
   price: number;
 
-  @Prop({ enum: ['pending', 'approved', 'rejected'], default: 'pending' })
-  status: 'pending' | 'approved' | 'rejected';
+  @Prop({ enum: SubscriptionStatus, default: SubscriptionStatus.PENDING })
+  status: SubscriptionStatus;
 
   @Prop()
   approvedAt?: Date;

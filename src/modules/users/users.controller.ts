@@ -1,9 +1,7 @@
 //users.controller.ts
 import { Controller, Post, Body, Put, Param, Delete, Get, Patch, Query, NotFoundException, ConflictException} from '@nestjs/common';
 import { UsersService } from './users.service';
-import { CreateUserDto } from './dto/create-users.dto';
 import { UpdateUserDto } from './dto/update-users.dto';
-import { CreateUserResponse } from './users.service';
 
 @Controller('user')
 export class UsersController {

@@ -5,6 +5,9 @@ import { MessageContentResolverService } from './message-content-resolver.servic
 import { MessageMedia } from 'whatsapp-web.js';
 import { ClientState } from '../interfaces/client-state.interface';
 import * as mime from 'mime-types';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { User, UserDocument } from '../../users/schema/users.schema';
 
 interface MessageResult {
   recipient: string;
@@ -39,6 +42,7 @@ export class MessageSenderService {
     private readonly sessionManager: SessionManagerService,
     private readonly recipientResolver: RecipientResolverService,
     private readonly contentResolver: MessageContentResolverService,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) { }
 
   async sendMessage(
@@ -46,7 +50,8 @@ export class MessageSenderService {
     to: string[],
     message?: string,
     delayMs: number = 3000,
-    photo?: Express.Multer.File
+    photo?: Express.Multer.File,
+    userId?: string
   ): Promise<{ message: string; results: MessageResult[]; photoSent?: boolean; summary: SendProgress }> {
     const clientState = this.sessionManager.getClientState(clientId);
 
@@ -95,7 +100,7 @@ export class MessageSenderService {
       };
 
       if (photo) {
-        results = await this.sendToRecipientsWithPhoto(clientState, resolvedTo, resolvedContent, photo, delayMs, summary);
+        results = await this.sendToRecipientsWithPhoto(clientState, resolvedTo, resolvedContent, photo, delayMs, summary, userId!);
         return {
           message: `Messages sent with photo: ${summary.successful}/${summary.total} successful`,
           results,
@@ -103,7 +108,7 @@ export class MessageSenderService {
           summary
         };
       } else {
-        results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary);
+        results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary, userId!);
         return {
           message: `Messages sent: ${summary.successful}/${summary.total} successful`,
           results,
@@ -119,7 +124,8 @@ export class MessageSenderService {
   async sendMessageExcel(
     clientId: string,
     data: { messages: { number: string; message: string }[] },
-    delayMs: number = 3000
+    delayMs: number = 3000,
+    userId: string
   ): Promise<{ message: string; results: MessageResult[]; summary: SendProgress }> {
     const clientState = this.sessionManager.getClientState(clientId);
 
@@ -163,7 +169,7 @@ export class MessageSenderService {
           const resolvedContent = await this.contentResolver.resolveContent(message, clientId);
           const summary: SendProgress = { total: 1, completed: 0, successful: 0, failed: 0, currentBatch: 0 };
 
-          const results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary);
+          const results = await this.sendToRecipients(clientState, resolvedTo, resolvedContent, delayMs, summary, userId);
           allResults.push(...results);
 
           if (results[0]?.status === 'sent' || results[0]?.status === 'likely_sent') {
@@ -232,7 +238,8 @@ export class MessageSenderService {
     recipients: string[],
     content: string,
     delayMs: number,
-    summary: SendProgress
+    summary: SendProgress,
+    userId: string
   ): Promise<MessageResult[]> {
     const results: MessageResult[] = [];
     const batchSize = 1; // Reduced batch size for better reliability
@@ -246,7 +253,7 @@ export class MessageSenderService {
       this.logger.debug(`📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
-        return await this.sendSingleMessage(clientState, recipient, content);
+        return await this.sendSingleMessage(clientState, recipient, content, userId);
       });
 
       const batchResults = await Promise.allSettled(batchPromises);
@@ -285,7 +292,14 @@ export class MessageSenderService {
     return results;
   }
 
-  private async sendSingleFileMessage(clientState: any, recipient: string, media: MessageMedia, caption: string, mimeType: string): Promise<MessageResult> {
+  private async sendSingleFileMessage(
+    clientState: any,
+    recipient: string,
+    media: MessageMedia,
+    caption: string,
+    mimeType: string,
+    userId: string
+  ): Promise<MessageResult> {
     try {
       const cleanedRecipient = recipient.replace(/\D/g, '');
       const chatId = `${cleanedRecipient}@c.us`;
@@ -302,6 +316,9 @@ export class MessageSenderService {
         this.logger.log(`📄 Sent document to ${recipient}: ${media.filename}`);
       }
 
+      // Increment message count for successful send
+      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
+
       return { recipient, status: 'sent' };
     } catch (error: any) {
       const knownSerializeError =
@@ -310,6 +327,8 @@ export class MessageSenderService {
 
       if (knownSerializeError) {
         this.logger.warn(`⚠️ File likely sent, but confirmation failed for ${recipient}: ${error.message}`);
+        // Increment message count for likely sent
+        await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
         return { recipient, status: 'likely_sent', warning: 'Sent but confirmation failed' };
       } else {
         this.logger.error(`❌ Failed to send file to ${recipient}: ${error.message}`);
@@ -324,7 +343,8 @@ export class MessageSenderService {
     caption: string,
     file: Express.Multer.File,
     delayMs: number,
-    summary: SendProgress
+    summary: SendProgress,
+    userId: string
   ): Promise<MessageResult[]> {
     const results: MessageResult[] = [];
     const batchSize = 1; // Smaller batch for all file types
@@ -350,7 +370,7 @@ export class MessageSenderService {
       this.logger.debug(`📦 Processing file batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
-        return await this.sendSingleFileMessage(clientState, recipient, media, caption, mimeType);
+        return await this.sendSingleFileMessage(clientState, recipient, media, caption, mimeType, userId);
       });
 
       const batchResults = await Promise.allSettled(batchPromises);
@@ -391,7 +411,12 @@ export class MessageSenderService {
     return results;
   }
 
-  private async sendSingleMessage(clientState: ClientState, recipient: string, content: string): Promise<MessageResult> {
+  private async sendSingleMessage(
+    clientState: ClientState,
+    recipient: string,
+    content: string,
+    userId: string
+  ): Promise<MessageResult> {
     try {
       const cleanedRecipient = recipient.replace(/\D/g, '');
       const chatId = `${cleanedRecipient}@c.us`;
@@ -400,6 +425,9 @@ export class MessageSenderService {
 
       const UniqContent = `${content} \n To : ${recipient}`;
       const messageResult = await clientState.client.sendMessage(chatId, UniqContent, { sendSeen: false });
+
+      // Increment message count for successful send
+      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
 
       return {
         recipient,
@@ -416,7 +444,8 @@ export class MessageSenderService {
     clientState: any,
     recipient: string,
     media: MessageMedia,
-    caption: string
+    caption: string,
+    userId: string
   ): Promise<MessageResult> {
     try {
       const cleanedRecipient = recipient.replace(/\D/g, '');
@@ -426,6 +455,9 @@ export class MessageSenderService {
       const UniqContent = `${caption} \n To : ${recipient}`;
 
       const messageResult = await clientState.client.sendMessage(chatId, media, { caption: UniqContent, sendSeen: false });
+
+      // Increment message count for successful send
+      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
 
       return {
         recipient,

@@ -1,14 +1,14 @@
 import { Controller, Get, Post, Body, Param, Delete, Patch } from '@nestjs/common';
 import { UserSubscriptionsService } from './user-subscriptions.service';
-import { CreateUserSubscriptionDto } from './dto/create-user-subscription.dto';
+import { GetUserId } from 'src/common/decorators';
 
 @Controller('request')
 export class UserSubscriptionsController {
   constructor(private readonly service: UserSubscriptionsService) {}
 
-  @Post()
-  create(@Body() dto: CreateUserSubscriptionDto) {
-    return this.service.create(dto);
+  @Post(":id")
+  create(@Param("id") id:string ,@GetUserId() userId) {
+    return this.service.create(id , userId);
   }
 
   @Get()

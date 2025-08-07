@@ -1,5 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { UserRole } from 'src/common/enum/user_role';
+import { UserSubscriptionStatus } from 'src/common/enum/subsription_status';
 
 // Define User interface explicitly
 export interface User {
@@ -36,8 +38,8 @@ class EmbeddedSubscription {
   @Prop({ default: 0 })
   messagesUsed: number;
 
-  @Prop({ enum: ['active', 'warning', 'expired'], default: 'active' })
-  status: 'active' | 'warning' | 'expired';
+  @Prop({ enum: UserSubscriptionStatus, default: UserSubscriptionStatus.ACTIVE })
+  status: UserSubscriptionStatus;
 }
 
 
@@ -52,7 +54,7 @@ function getFreePlan(): Partial<EmbeddedSubscription> {
     startDate: now,
     endDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
     messagesUsed: 0,
-    status: 'active',
+    status: UserSubscriptionStatus.ACTIVE,
   };
 }
 
@@ -61,7 +63,7 @@ const EmbeddedSubscriptionSchema = SchemaFactory.createForClass(EmbeddedSubscrip
 
 export type UserDocument = User & Document;
 
-@Schema({ timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } })
+@Schema()
 export class User extends Document {
   @Prop({ required: true, unique: true })
   email: string;
@@ -75,6 +77,13 @@ export class User extends Document {
   @Prop({ type: EmbeddedSubscriptionSchema, default: getFreePlan })
   subscription: EmbeddedSubscription;
 
+  @Prop({ 
+    required: true, 
+    enum: UserRole, 
+    default: UserRole.USER 
+  })
+  userRole: UserRole;
 }
+
 
 export const UserSchema = SchemaFactory.createForClass(User);

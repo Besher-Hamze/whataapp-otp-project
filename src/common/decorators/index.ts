@@ -1,4 +1,4 @@
-import { BadRequestException, createParamDecorator, ExecutionContext } from '@nestjs/common';
+import { BadRequestException, createParamDecorator, ExecutionContext, SetMetadata } from '@nestjs/common';
 
 export const GetUserId = createParamDecorator(
   (data: keyof Express.User | undefined, ctx: ExecutionContext) => {
@@ -19,3 +19,6 @@ export const GetWhatsappAccountId = createParamDecorator(
     return user.account_id;
   },
 );
+
+export const ROLES_KEY = 'roles';
+export const Roles = (...roles: ('user' | 'admin')[]) => SetMetadata(ROLES_KEY, roles);

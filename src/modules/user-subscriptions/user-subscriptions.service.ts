@@ -20,13 +20,34 @@ export class UserSubscriptionsService {
     @InjectConnection() private readonly connection: Connection,
   ) {}
 
-  async create(subscriptionId: string, userId : string) {
-    const subscription= this.subscriptionModel.findById(subscriptionId);
-    if(!subscription){
-      throw new BadRequestException("This sybc,,,,,,");
-    }
-    return this.requestModel.create({ userId , ...subscription});
+  // src/modules/user-subscriptions/user-subscriptions.service.ts
+async create(subscriptionId: string, userId: string) {
+  const subscriptionPlan = await this.subscriptionModel.findById(subscriptionId);
+  
+  if (!subscriptionPlan) {
+    throw new BadRequestException('This subscription plan does not exist.');
   }
+
+  const { _id, ...subscriptionData } = subscriptionPlan.toObject();
+
+  // Find and update the user's subscription document.
+  // If one does not exist, a new one will be created (upsert: true).
+  return this.requestModel.findOneAndUpdate(
+    { user: userId },
+    {
+      user: userId,
+      status: SubscriptionStatus.PENDING,
+      ...subscriptionData,
+    },
+    { new: true, upsert: true } // Return the new document, and create if it doesn't exist
+  );
+}
+
+  // src/modules/user-subscriptions/user-subscriptions.service.ts
+async findSubscriptionByUserId(userId: string) {
+  // Find the single UserSubscription document for this user, regardless of its status
+  return this.requestModel.findOne({ user: userId }).populate('user');
+}
 
   async findAll() {
     return this.requestModel.find().populate('user');

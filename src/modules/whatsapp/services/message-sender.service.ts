@@ -63,6 +63,17 @@ export class MessageSenderService {
       throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
     }
 
+     // ✅ Check user's message limit here
+    const user = await this.userModel.findById(userId);
+
+    if (!user || !user.subscription) {
+      throw new HttpException('User subscription not found.', HttpStatus.FORBIDDEN);
+    }
+
+    if (user.subscription.messagesUsed >= user.subscription.messageLimit) {
+      throw new HttpException('Message limit exceeded. Please upgrade your subscription.', HttpStatus.FORBIDDEN);
+    }
+
     await this.validateClientConnection(clientState, clientId);
 
     this.sessionManager.updateClientState(clientId, {
@@ -135,6 +146,17 @@ export class MessageSenderService {
 
     if (clientState.isSending) {
       throw new HttpException('Already sending messages from this account. Please wait.', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+     // ✅ Check user's message limit here
+    const user = await this.userModel.findById(userId);
+
+    if (!user || !user.subscription) {
+      throw new HttpException('User subscription not found.', HttpStatus.FORBIDDEN);
+    }
+
+    if (user.subscription.messagesUsed >= user.subscription.messageLimit) {
+      throw new HttpException('Message limit exceeded. Please upgrade your subscription.', HttpStatus.FORBIDDEN);
     }
 
     await this.validateClientConnection(clientState, clientId);

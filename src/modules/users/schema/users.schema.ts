@@ -47,7 +47,7 @@ function getFreePlan(): Partial<EmbeddedSubscription> {
   const now = new Date();
   return {
     name: 'Free',
-    messageLimit: 1000,
+    messageLimit: 5,
     durationInDays: 30,
     features: ['Basic messaging'],
     isCustom: false,

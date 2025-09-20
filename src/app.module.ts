@@ -21,6 +21,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { UserSubscription } from './modules/user-subscriptions/schema/user-subscription.schema';
 import { AdminModule } from './modules/admin/admin.module';
+import { SeedModule } from './modules/seed/seed.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { AdminModule } from './modules/admin/admin.module';
     SubscriptionsModule,
     UserSubscription,
     AdminModule,
+    SeedModule,
   ],
   controllers: [AppController],
   providers: [

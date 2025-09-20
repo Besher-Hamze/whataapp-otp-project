@@ -1,7 +1,11 @@
-import { Controller, Get, Post, Body, Param, Delete, Patch } from '@nestjs/common';
+// src/modules/user-subscriptions/user-subscriptions.controller.ts
+import { Controller, Get, Post, Body, Param, Delete, Patch, UseGuards } from '@nestjs/common';
 import { UserSubscriptionsService } from './user-subscriptions.service';
 import { GetUserId } from 'src/common/decorators';
+import { JwtGuard } from 'src/common/guards/jwt.guard';
 
+
+@UseGuards(JwtGuard)
 @Controller('request')
 export class UserSubscriptionsController {
   constructor(private readonly service: UserSubscriptionsService) {}
@@ -9,6 +13,12 @@ export class UserSubscriptionsController {
   @Post(":id")
   create(@Param("id") id:string ,@GetUserId() userId) {
     return this.service.create(id , userId);
+  }
+
+   @Get('my-status')
+  findMyPendingRequest(@GetUserId() userId: string) {
+    console.log("UserId from request:", userId);
+    return this.service.findSubscriptionByUserId(userId);
   }
 
   @Get()

@@ -89,6 +89,26 @@ async findSubscriptionByUserId(userId: string) {
     return 'Subscription approved and applied to user';
   }
 
+  async disapprove(id: string): Promise<{ message: string }> {
+    const request = await this.requestModel.findById(id);
+    if (!request) {
+      throw new NotFoundException('Subscription request not found.');
+    }
+
+    if (request.status === SubscriptionStatus.REJECTED) {
+      return { message: 'Already disapproved' };
+    }
+
+    if (request.status === SubscriptionStatus.APPROVED) {
+      return { message: 'Cannot disapprove an already approved subscription.' };
+    }
+
+    request.status = SubscriptionStatus.REJECTED;
+    await request.save();
+
+    return { message: 'Subscription request disapproved successfully. User\'s current plan remains unchanged.' };
+  }
+
   async delete(id: string) {
     return this.requestModel.findByIdAndDelete(id);
   }

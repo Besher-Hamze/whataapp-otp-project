@@ -59,6 +59,10 @@ export class AdminSubscriptionsController {
   approve(@Param('id') id: string) {
     return this.userSubscriptionsService.approve(id);
   }
+@Patch('requests/:id/disapprove')
+disapproveSubscriptionRequest(@Param('id') requestId: string) {
+  return this.userSubscriptionsService.disapprove(requestId);
+}
 
   @Delete('requests/:id')
   deleteRequest(@Param('id') id: string) {

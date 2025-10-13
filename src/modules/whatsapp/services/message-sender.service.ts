@@ -68,7 +68,7 @@ export class MessageSenderService {
 
     if (!user || !user.subscription) {
       this.logger.error(`User subscription not found for user ${userId} and subscription ${user?.subscription} and user ${user}`);
-      throw new HttpException('User subscription not found.', HttpStatus.FORBIDDEN);
+      throw new HttpException(`User subscription not found for user ${userId} and subscription ${user?.subscription} and user ${user}.`, HttpStatus.FORBIDDEN);
     }
 
     if (user.subscription.messagesUsed >= user.subscription.messageLimit) {

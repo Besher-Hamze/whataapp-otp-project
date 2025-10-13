@@ -27,6 +27,7 @@ import { AccountsService } from '../accounts/accounts.service';
 import { SendMessageExcelDto } from './dto/excel-message.dto';
 import * as multer from 'multer';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { MessageLimitGuard } from 'src/common/guards/message-limit.guard';
 
 const storage = multer.memoryStorage(); // Temporary in memory
 const upload = multer({
@@ -70,6 +71,7 @@ export class WhatsAppController {
     };
   }
 
+  @UseGuards(MessageLimitGuard)
   @Post('send-excel')
   async sendExcel(
     @Body() dto: SendMessageExcelDto,
@@ -130,6 +132,7 @@ export class WhatsAppController {
         client.clientId,
         dto,
         messageDelay,
+        userId,
       );
 
       const duration = Date.now() - startTime;
@@ -173,6 +176,7 @@ export class WhatsAppController {
     }
   }
 
+  @UseGuards(MessageLimitGuard)
   @Post('send-message')
   @UseInterceptors(FileInterceptor('photo', { storage: storage }))
   async sendMessage(
@@ -230,6 +234,7 @@ export class WhatsAppController {
         body.message ?? '',
         messageDelay,
         file, // Pass the optional file
+        userId,
       );
 
       // Debug: Log result to identify circular references

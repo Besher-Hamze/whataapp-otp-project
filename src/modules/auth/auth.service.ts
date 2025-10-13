@@ -32,7 +32,7 @@ export class AuthService {
   async register(createUserDto: CreateUserDto): Promise<{ user: UserDocument; access_token: string; refresh_token: string }> { // Update return type
     const newUser = await this.usersService.createUser(createUserDto);
 
-    const payload = { sub: newUser._id, email: newUser.email };
+    const payload = { sub: newUser._id, email: newUser.email , role: newUser.userRole };
     const accessToken = this.jwtService.sign(payload, {
       secret: process.env.JWT_SECRET,
       expiresIn: '1d',
@@ -92,7 +92,11 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
 
   // Generate fallback tokens without account_id
   this.logger.debug(`Generating fallback tokens without account_id for user: ${user.email}`);
-  const payload = { sub: user._id, email: user.email };
+  const payload = { 
+  sub: user._id, 
+  email: user.email,
+  userRole: user.userRole // ✅ Add this line
+};
   let accessToken = this.jwtService.sign(payload, {
     secret: process.env.JWT_SECRET,
     expiresIn: '1d',
@@ -327,13 +331,13 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
     }
   }
 
-  async generateApiKey(userId: string): Promise<string> {
-    // Fetch an active accountId for the user (e.g., the first active account)
+  async generateApiKey(userId: string, accountId: string): Promise<string> {  // Now takes accountId
+    // Validate account exists and belongs to user
     const accounts = await this.accountService.findAccountsByUser(userId);
-    if (!accounts || accounts.length === 0) {
-      throw new BadRequestException('No active accounts found for this user');
+    const account = accounts.find(acc => acc._id.toString() === accountId);
+    if (!account) {
+      throw new BadRequestException('No active account found for this user with the provided accountId');
     }
-    const accountId = accounts[0]._id.toString(); // Use the first account, or implement logic to select one
 
     const apiKey = uuidv4();
     await this.apiKeyModel.create({

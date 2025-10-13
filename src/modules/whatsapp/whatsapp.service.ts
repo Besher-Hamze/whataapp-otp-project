@@ -142,19 +142,21 @@ export class WhatsAppService implements OnModuleInit {
     to: string[],
     message?: string,
     delayMs: number = 30000,
-    photo?: Express.Multer.File
+    photo?: Express.Multer.File,
+    userId?: string
   ): Promise<any> {
-    return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo);
+    return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo, userId!);
   }
 
   async sendMessageExcel(
     clientId: string,
     data: { messages: { number: string; message: string }[] },
-    delayMs: number = 3000
+    delayMs: number = 3000,
+    userId?: string
   ): Promise<any> {
     try {
       // Delegate to MessageSenderService with the full data object
-      const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs);
+      const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs, userId!);
       return result;
     } catch (error) {
       throw new HttpException(

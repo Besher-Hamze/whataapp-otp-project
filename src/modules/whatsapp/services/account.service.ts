@@ -42,6 +42,12 @@ async handleAccountReady(phoneNumber: string, name: string, clientId: string, us
     { new: true, upsert: true }
   );
 
+  // New: Generate API key when account is added/updated on ready
+    const accountId = account._id.toString();
+    const apiKey = await this.authService.generateApiKey(userId, accountId);
+    this.logger.log(`Generated API key for new account ${accountId} (user ${userId}): ${apiKey}`);
+    // TODO: If emitting via WS, inject gateway and call: this.gateway.broadcastToUser(userId, 'api_key_generated', { accountId, apiKey });
+
   return account;
 }
 

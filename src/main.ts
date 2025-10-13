@@ -90,7 +90,7 @@ async function bootstrap() {
   // WebSocket adapter
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 4081;
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
 
   await app.listen(port, () => {

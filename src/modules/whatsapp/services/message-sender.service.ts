@@ -67,6 +67,7 @@ export class MessageSenderService {
     const user = await this.userModel.findById(userId);
 
     if (!user || !user.subscription) {
+      this.logger.error(`User subscription not found for user ${userId} and subscription ${user?.subscription} and user ${user}`);
       throw new HttpException('User subscription not found.', HttpStatus.FORBIDDEN);
     }
 

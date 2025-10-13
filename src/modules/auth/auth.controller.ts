@@ -27,7 +27,7 @@ export class AuthController {
     private readonly otpService: OtpService,
     private readonly accountService: AccountsService,
     private readonly whatsappService: WhatsAppService,
-  ) {}
+  ) { }
 
   @Post('register')
   async register(@Body() createUserDto: CreateUserDto) {
@@ -99,6 +99,8 @@ export class AuthController {
         [phone_number],
         message,
         3000,
+        undefined,
+        userId,
       );
       return { message: 'OTP sent successfully' };
     } catch (error) {

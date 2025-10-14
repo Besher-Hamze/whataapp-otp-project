@@ -1,5 +1,5 @@
 // src/whatsapp/services/account.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
@@ -7,6 +7,10 @@ import { AuthService } from '../../auth/auth.service';
 import { CleanupService } from './cleanup.service';
 import { SessionManagerService } from './session-manager.service';
 import { Client } from 'whatsapp-web.js';
+import { Contact, ContactDocument } from 'src/modules/contacts/schema/contacts.schema';
+import { Group, GroupDocument } from 'src/modules/groups/schema/groups.schema';
+import { Rule, RuleDocument } from 'src/modules/rules/schema/rules.schema';
+import { Template, TemplateDocument } from 'src/modules/templates/schema/template.schema';
 
 @Injectable()
 export class AccountService {
@@ -14,69 +18,39 @@ export class AccountService {
 
     constructor(
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
+        @InjectModel(Contact.name) private contactModel: Model<ContactDocument>,
+        @InjectModel(Group.name) private groupModel: Model<GroupDocument>,
+        @InjectModel(Rule.name) private ruleModel: Model<RuleDocument>,
+        @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
         private readonly authService: AuthService,
         private readonly cleanupService: CleanupService, // Injected
         private readonly sessionManager: SessionManagerService
     ) { }
 
-    async handleAccountReady(
-        phoneNumber: string,
-        name: string,
-        clientId: string,
-        userId: string
-    ): Promise<void> {
-        const existingAccount = await this.accountModel.findOne({ phone_number: phoneNumber }).lean().exec();
+    // account.service.ts
+async handleAccountReady(phoneNumber: string, name: string, clientId: string, userId: string): Promise<AccountDocument> {
+  // ... your existing logic
+  const account = await this.accountModel.findOneAndUpdate(
+    { clientId },
+    {
+      phoneNumber,
+      name,
+      clientId,
+      user: userId,
+      updatedAt: new Date()
+    },
+    { new: true, upsert: true }
+  );
 
-        if (existingAccount) {
-            if (existingAccount.user.toString() !== userId) {
-                throw new Error(`Phone number ${phoneNumber} is already in use by another user.`);
-            }
+  // New: Generate API key when account is added/updated on ready
+    const accountId = account._id.toString();
+    const apiKey = await this.authService.generateApiKey(userId, accountId);
+    this.logger.log(`Generated API key for new account ${accountId} (user ${userId}): ${apiKey}`);
+    // TODO: If emitting via WS, inject gateway and call: this.gateway.broadcastToUser(userId, 'api_key_generated', { accountId, apiKey });
 
-            if (existingAccount.clientId !== clientId) {
-                await this.accountModel.updateOne(
-                    { _id: existingAccount._id },
-                    { 
-                        clientId, 
-                        status: 'ready',
-                        'sessionData.isAuthenticated': true,
-                        'sessionData.lastConnected': new Date(),
-                        'sessionData.authState': 'authenticated',
-                        'sessionData.sessionValid': true
-                    }
-                ).exec();
-                this.logger.log(`🔄 Updated account ${existingAccount._id} with new clientId ${clientId}`);
-            } else {
-                // Update session data for existing account with same clientId
-                await this.accountModel.updateOne(
-                    { _id: existingAccount._id },
-                    { 
-                        status: 'ready',
-                        'sessionData.isAuthenticated': true,
-                        'sessionData.lastConnected': new Date(),
-                        'sessionData.authState': 'authenticated',
-                        'sessionData.sessionValid': true
-                    }
-                ).exec();
-                this.logger.log(`✅ Updated session data for existing account ${existingAccount._id}`);
-            }
-        } else {
-            await this.accountModel.create({
-                name,
-                phone_number: phoneNumber,
-                user: userId,
-                clientId,
-                status: 'ready',
-                sessionData: {
-                    isAuthenticated: true,
-                    lastConnected: new Date(),
-                    authState: 'authenticated',
-                    sessionValid: true
-                },
-                created_at: new Date(),
-            });
-            this.logger.log(`✅ Created new account for ${phoneNumber} with clientId ${clientId}`);
-        }
-    }
+  return account;
+}
+
 
     async handleLogout(clientId: string, client: Client): Promise<void> { // Add client parameter
         const clientState = this.sessionManager.getClientState(clientId);
@@ -109,16 +83,67 @@ export class AccountService {
             // Don't throw here, as logout cleanup should be best-effort
         }
     }
-
-    async deleteAccountOnLogout(accountId: string): Promise<void> {
-        const account = await this.accountModel.findById(accountId).exec();
-        if (account) {
-            const userId = account.user.toString();
-            await this.authService.removeAccountFromTokens(userId, accountId);
-            await this.accountModel.deleteOne({ _id: accountId }).exec();
-            this.logger.log(`✅ Account ${accountId} deleted on logout`);
+    async findAccountById(id: string): Promise<AccountDocument | null> {
+        try {
+          const account = await this.accountModel.findById(id).exec();
+          if (!account) {
+            throw new NotFoundException(`Account with ID "${id}" not found`);
+          }
+          return account;
+        } catch (error) {
+          if (error.name === 'CastError') {
+            throw new NotFoundException(`Invalid Account ID "${id}"`);
+          }
+          throw error;
         }
+      }
+
+async deleteAccountOnLogout(accountId: string): Promise<void> {
+    try {
+      const account = await this.accountModel.findById(accountId).exec();
+      if (!account) {
+        this.logger.warn(`⚠️ Account ${accountId} not found`);
+        return;
+      }
+
+      const userId = account.user.toString();
+   // Debug: Check matching groups before deletion
+      const groupCount = await this.groupModel.countDocuments({ account: accountId }).exec();
+      this.logger.debug(`🔍 Found ${groupCount} groups for account ${accountId} before deletion`);
+      
+      // Perform deletions
+      const deletePromises = [
+        this.contactModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} contacts for account ${accountId}`);
+          return result;
+        }),
+        this.groupModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} groups for account ${accountId}`);
+          return result;
+        }),
+        this.ruleModel.deleteMany({account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} rules for account ${accountId}`);
+          return result;
+        }),
+        this.templateModel.deleteMany({ account: accountId }).then(result => {
+          this.logger.log(`✅ Deleted ${result.deletedCount} templates for account ${accountId}`);
+          return result;
+        }),
+        this.accountModel.deleteOne({ _id: accountId }).then(result => {
+          this.logger.log(`✅ Deleted account ${accountId}`);
+          return result;
+        }),
+      ];
+
+      await this.authService.removeAccountFromTokens(userId, accountId);
+      await Promise.all(deletePromises);
+
+      this.logger.log(`✅ Deleted account and all related data for ${accountId}`);
+    } catch (error) {
+      this.logger.error(`❌ Error deleting account ${accountId}: ${error.message}`, error.stack);
+      throw new HttpException(`Failed to delete account: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
 
     async getUserAccounts(userId: string): Promise<AccountDocument[]> {
         return await this.accountModel.find({ user: userId }).lean().exec();

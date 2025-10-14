@@ -18,6 +18,10 @@ import { TemplatesModule } from './modules/templates/templates.module';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { RateLimitInterceptor } from './common/interceptors/rate-limit.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { UserSubscription } from './modules/user-subscriptions/schema/user-subscription.schema';
+import { AdminModule } from './modules/admin/admin.module';
+import { SeedModule } from './modules/seed/seed.module';
 
 @Module({
   imports: [
@@ -62,7 +66,11 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     RulesModule,
     AutoResponderModule,
     TemplatesModule,
-    OtpModule
+    OtpModule,
+    SubscriptionsModule,
+    UserSubscription,
+    AdminModule,
+    SeedModule,
   ],
   controllers: [AppController],
   providers: [

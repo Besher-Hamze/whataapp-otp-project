@@ -9,10 +9,10 @@ import { Model } from 'mongoose';
 export class RulesService {
   private readonly logger = new Logger(RulesService.name);
 
-constructor(
+  constructor(
     @InjectModel(Rule.name)
     private ruleModel: Model<RuleDocument>, // ✅ This is critical
-  ) {}
+  ) { }
 
 
   async create(createRuleDtos: CreateRuleDto[], accountId: string) {
@@ -34,13 +34,13 @@ constructor(
     }
 
     if (newRules.length > 0) {
-      await this.ruleModel.insertMany(newRules as Rule[]); // ✅ TS2345 should now disappear
+      await this.ruleModel.insertMany(newRules as Rule[]);
     }
 
-    return {
-      insertedCount: newRules.length,
-      skippedCount: createRuleDtos.length - newRules.length,
-    };
+    const replies = await this.findAllRules(accountId);
+
+    return replies;
+
   }
 
 
@@ -65,7 +65,7 @@ constructor(
 
   async findRuleByKeyword(keyword: string, accountId: string): Promise<Rule | null> {
     return this.ruleModel.findOne({
-      keywords: keyword, // Updated to match any keyword in the array
+      keywords: keyword,
       user: accountId
     }).exec();
   }
@@ -100,23 +100,23 @@ constructor(
   }
 
   async updateRule(id: string, updateRuleDto: UpdateRuleDto, accountId: string): Promise<Rule | null> {
-    // Check if the rule exists and belongs to the user
+    // Check if the rule exists and belongs to the account
     const existingRule = await this.findRuleById(id, accountId);
 
     if (!existingRule) {
-      throw new NotFoundException(`Rule with ID "${id}" not found or does not belong to user`);
+      throw new NotFoundException(`Rule with ID "${id}" not found or does not belong to account`);
     }
 
-    // If keyword is being updated, check for duplicates
+    // If keywords are being updated, check for duplicates
     if (updateRuleDto.keywords) {
       const duplicateRule = await this.ruleModel.findOne({
-        keywords: { $in: updateRuleDto.keywords }, // Updated to check keywords array
-        user: accountId,
+        keywords: { $in: updateRuleDto.keywords },
+        account: accountId, // ✅ FIXED
         _id: { $ne: id },
       }).exec();
 
       if (duplicateRule) {
-        throw new ConflictException('One or more keywords already exist for this user');
+        throw new ConflictException('One or more keywords already exist for this account');
       }
     }
 
@@ -131,19 +131,22 @@ constructor(
       )
       .exec();
 
-    this.logger.log(`Updated rule ${id} for user ${accountId}`);
+    this.logger.log(`Updated rule ${id} for account ${accountId}`);
     return updatedRule;
   }
 
+
   async deleteRule(id: string, accountId: string): Promise<void> {
-    // Verify the rule exists and belongs to the user
+    // Verify the rule exists and belongs to the account
     await this.findRuleById(id, accountId);
 
-    const result = await this.ruleModel.deleteOne({ _id: id, user: accountId }).exec();
+    const result = await this.ruleModel.deleteOne({ _id: id, account: accountId }).exec(); // ✅ FIXED
+
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Rule with ID "${id}" not found`);
     }
 
-    this.logger.log(`Deleted rule ${id} for user ${accountId}`);
+    this.logger.log(`Deleted rule ${id} for account ${accountId}`);
   }
+
 }

@@ -1,16 +1,22 @@
-import { IsString, IsEmail, IsNotEmpty, MinLength, Matches } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, IsEnum, IsOptional } from 'class-validator';
 
 export class CreateUserDto {
-  @IsString()
-  @IsNotEmpty()
-  username: string;
-
   @IsEmail()
-  @IsNotEmpty()
   email: string;
 
   @IsString()
   @IsNotEmpty()
-  @MinLength(6)
   password: string;
+
+  @IsString()
+  @IsNotEmpty()
+  username: string;
+
+  @IsString()
+  @IsOptional()
+  phone_number?: string;
+
+  @IsEnum(['user', 'admin'])
+  @IsOptional()
+  userRole?: 'user' | 'admin'; // Optional — defaults to 'user'
 }

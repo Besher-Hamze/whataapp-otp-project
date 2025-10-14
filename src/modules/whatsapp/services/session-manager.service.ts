@@ -1,11 +1,11 @@
 // src/whatsapp/services/session-manager.service.ts
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Client, LocalAuth } from 'whatsapp-web.js';
-import { ClientState } from '../interfaces/client-state.interface';
 import { PuppeteerConfigService } from './puppeteer-config.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
+import { ClientState } from '../interfaces/client-state.interface';
 
 @Injectable()
 export class SessionManagerService implements OnModuleInit {
@@ -27,7 +27,7 @@ export class SessionManagerService implements OnModuleInit {
 
     async createSession(clientId: string, userId: string, isRestore: boolean = false): Promise<Client> {
         this.logger.log(`🚀 Creating ${isRestore ? 'restored' : 'new'} session for clientId: ${clientId}`);
-        
+
         const client = new Client({
             authStrategy: new LocalAuth({ clientId }),
             puppeteer: this.puppeteerConfig.getConfig(),
@@ -43,7 +43,7 @@ export class SessionManagerService implements OnModuleInit {
         };
 
         this.clientStates.set(clientId, clientState);
-        
+
         if (isRestore) {
             this.restoredSessions.add(clientId);
         }
@@ -53,15 +53,21 @@ export class SessionManagerService implements OnModuleInit {
 
     async saveSessionState(clientId: string): Promise<void> {
         try {
+            const client: ClientState | undefined = await this.getClientState(clientId);
+            let phoneNumber = "Unknown"
+            if (client) {
+                phoneNumber = client.client.info.wid.user
+            }
             await this.accountModel.updateOne(
                 { clientId },
-                { 
-                    $set: { 
+                {
+                    $set: {
                         'sessionData.isAuthenticated': true,
                         'sessionData.lastConnected': new Date(),
                         'sessionData.authState': 'authenticated',
                         'sessionData.sessionValid': true,
-                        status: 'ready'
+                        status: 'ready',
+                        phone_number: phoneNumber
                     }
                 }
             );
@@ -85,8 +91,8 @@ export class SessionManagerService implements OnModuleInit {
         try {
             await this.accountModel.updateOne(
                 { clientId },
-                { 
-                    $set: { 
+                {
+                    $set: {
                         'sessionData.isAuthenticated': false,
                         'sessionData.authState': 'disconnected',
                         'sessionData.sessionValid': false,
@@ -155,7 +161,7 @@ export class SessionManagerService implements OnModuleInit {
         if (!state) return null;
 
         const dbState = await this.loadSessionState(clientId);
-        
+
         return {
             clientId,
             isReady: state.isReady,

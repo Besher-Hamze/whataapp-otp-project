@@ -45,7 +45,7 @@ export class ContactsService {
       const newContact = await this.contactModel.create({
         ...createContactDto,
         phone_number: formattedPhoneNumber,
-         account: accountId,
+        account: accountId,
         created_at: new Date(),
         updated_at: new Date(),
       });
@@ -108,34 +108,15 @@ export class ContactsService {
    */
   async findAllContacts(
     accountId: string,
-    search?: string,
-    skip: number = 0,
-    limit: number = 50
   ): Promise<{ contacts: ContactDocument[], total: number }> {
     // Build query based on account ID and optional search term
     const query: any = { account: accountId };
-
-    if (search) {
-      // Search in name or phone number fields
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phone_number: { $regex: search, $options: 'i' } },
-      ];
-
-      // If search term is a tag, search in tags array too
-      if (!search.includes(' ')) {
-        query.$or.push({ tags: { $regex: search, $options: 'i' } });
-      }
-    }
 
     // Get total count for pagination
     const total = await this.contactModel.countDocuments(query);
 
     // Get paginated results
     const contacts = await this.contactModel.find(query)
-      .sort({ name: 1 }) // Sort by name
-      .skip(skip)
-      .limit(limit)
       .populate('groups', 'name') // Include group names
       .exec();
 
@@ -183,12 +164,12 @@ export class ContactsService {
   ) {
     // Only update contacts belonging to this account
     const result = await this.contactModel.updateMany(
-    {
-      _id: { $in: contactIds },
-      account: new Types.ObjectId(accountId),  // Make sure this is ObjectId, not string
-    },
-    { $addToSet: { groups: groupId } },
-  );
+      {
+        _id: { $in: contactIds },
+        account: new Types.ObjectId(accountId),  // Make sure this is ObjectId, not string
+      },
+      { $addToSet: { groups: groupId } },
+    );
     this.logger.log(`Contact IDs to update: ${contactIds.map(id => id.toString())}`);
 
     this.logger.log(`Added group ${groupId} to ${result.modifiedCount} contacts`);

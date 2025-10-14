@@ -27,19 +27,19 @@ export class WhatsAppService implements OnModuleInit {
 
   async onModuleInit() {
     this.logger.log('🚀 WhatsApp Service initializing...');
-    
+
     // Restore existing sessions after a delay to ensure all services are ready
     setTimeout(async () => {
       this.logger.log('🔄 Starting session restoration...');
       await this.sessionRestoration.loadClientsFromSessions();
       this.logger.log(`✅ Session restoration completed. Active sessions: ${this.getActiveSessionCount()}`);
     }, 5000);
-    
+
     // Cleanup inactive sessions every 10 minutes
     setInterval(() => {
       this.cleanupService.cleanupInactiveSessions();
     }, 600000);
-    
+
     this.logger.log('✅ WhatsApp Service initialized successfully');
   }
 
@@ -74,11 +74,11 @@ export class WhatsAppService implements OnModuleInit {
     const userSessions = this.sessionManager.getSessionsForUser(userId);
     if (userSessions.length > 0 && !accountId) {
       const readySession = userSessions.find(sessionId => this.sessionManager.isClientReady(sessionId));
-      if (readySession) {
-        this.logger.log(`✅ Found existing ready session for user: ${readySession}`);
-        this.sessionManager.mapSocketToClient(socketClientId, readySession);
-        return { clientId: readySession };
-      }
+      // if (readySession) {
+      //   this.logger.log(`✅ Found existing ready session for user: ${readySession}`);
+      //   this.sessionManager.mapSocketToClient(socketClientId, readySession);
+      //   return { clientId: readySession };
+      // }
     }
 
     // Prevent duplicate initialization
@@ -140,10 +140,30 @@ export class WhatsAppService implements OnModuleInit {
   async sendMessage(
     clientId: string,
     to: string[],
-    message: string,
-    delayMs: number = 3000
+    message?: string,
+    delayMs: number = 30000,
+    photo?: Express.Multer.File,
+    userId?: string
   ): Promise<any> {
-    return await this.messageSender.sendMessage(clientId, to, message, delayMs);
+    return await this.messageSender.sendMessage(clientId, to, message, delayMs, photo, userId!);
+  }
+
+  async sendMessageExcel(
+    clientId: string,
+    data: { messages: { number: string; message: string }[] },
+    delayMs: number = 3000,
+    userId?: string
+  ): Promise<any> {
+    try {
+      // Delegate to MessageSenderService with the full data object
+      const result = await this.messageSender.sendMessageExcel(clientId, data, delayMs, userId!);
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message || 'Failed to process bulk message request',
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
   }
 
   async disconnectClient(socketClientId: string) {
@@ -169,7 +189,7 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async deleteAccount(accountId: string) {
-    const account = await this.accountService.findAccountByClientId(accountId);
+    const account = await this.accountService.findAccountById(accountId);
     if (!account) {
       throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
     }
@@ -208,7 +228,7 @@ export class WhatsAppService implements OnModuleInit {
     if (!clientState) return null;
 
     const sessionStatus = await this.sessionManager.getSessionStatus(clientId);
-    
+
     return {
       clientId,
       isReady: clientState.isReady,
@@ -235,7 +255,7 @@ export class WhatsAppService implements OnModuleInit {
     const allSessions = this.sessionManager.getAllSessions();
     const readySessions = Array.from(allSessions.values()).filter(c => c.isReady);
     const restoredSessions = this.getRestoredSessions();
-    
+
     return {
       status: 'healthy',
       metrics: {

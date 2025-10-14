@@ -9,7 +9,7 @@ import { Types } from 'mongoose';
 @UseGuards(JwtGuard)
 @Controller('contacts')
 export class ContactsController {
-  constructor(private readonly contactsService: ContactsService) {}
+  constructor(private readonly contactsService: ContactsService) { }
 
   @Post()
   create(
@@ -22,12 +22,8 @@ export class ContactsController {
   @Get()
   findAll(
     @GetWhatsappAccountId() accountId: string,
-    @Query('search') search?: string,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number = 50
   ) {
-    const skip = (page - 1) * limit;
-    return this.contactsService.findAllContacts(accountId, search, skip, limit);
+    return this.contactsService.findAllContacts(accountId);
   }
 
   @Get(':id')
@@ -54,7 +50,7 @@ export class ContactsController {
   ) {
     return this.contactsService.deleteContact(id, accountId);
   }
-  
+
   @Get('phone/:phoneNumber')
   findByPhoneNumber(
     @Param('phoneNumber') phoneNumber: string,
@@ -62,7 +58,7 @@ export class ContactsController {
   ) {
     return this.contactsService.findByPhoneNumber(phoneNumber, accountId);
   }
-  
+
 
   @Get('group/:groupId')
   findByGroup(
@@ -71,7 +67,7 @@ export class ContactsController {
   ) {
     return this.contactsService.findByGroupId(groupId, accountId);
   }
-  
+
   @Post('group/:groupId/add')
   addToGroup(
     @Param('groupId') groupId: string,
@@ -82,7 +78,7 @@ export class ContactsController {
     const groupObjectId = new Types.ObjectId(groupId);
     return this.contactsService.addGroupToContacts(contactIds, groupObjectId, accountId);
   }
-  
+
   @Post('group/:groupId/remove')
   removeFromGroup(
     @Param('groupId') groupId: string,
@@ -93,7 +89,7 @@ export class ContactsController {
     const groupObjectId = new Types.ObjectId(groupId);
     return this.contactsService.removeGroupFromContacts(contactIds, groupObjectId, accountId);
   }
-  
+
   @Post('tags/add')
   addTags(
     @Body() body: { contactIds: string[], tags: string[] },
@@ -101,7 +97,7 @@ export class ContactsController {
   ) {
     return this.contactsService.addTagsToContacts(body.contactIds, body.tags, accountId);
   }
-  
+
   @Post('tags/remove')
   removeTags(
     @Body() body: { contactIds: string[], tags: string[] },
@@ -109,7 +105,7 @@ export class ContactsController {
   ) {
     return this.contactsService.removeTagsFromContacts(body.contactIds, body.tags, accountId);
   }
-  
+
   @Get('tags/find')
   findByTags(
     @Query('tags') tagsString: string,
@@ -118,7 +114,7 @@ export class ContactsController {
     const tags = tagsString.split(',').map(tag => tag.trim());
     return this.contactsService.findByTags(tags, accountId);
   }
-  
+
   @Post('import')
   bulkImport(
     @Body() body: { contacts: CreateContactDto[] },

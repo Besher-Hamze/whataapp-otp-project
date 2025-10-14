@@ -6,30 +6,29 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import helmet from 'helmet';
 import * as compression from 'compression';
 import * as cookieParser from 'cookie-parser';
-import * as bodyParser from 'body-parser'; 
 
 // Global error handlers for WhatsApp protocol errors
 process.on('unhandledRejection', (reason, promise) => {
   if (reason && typeof reason === 'object' && 'message' in reason) {
     const message = (reason as Error).message;
-    if (message.includes('Protocol error') && 
-        (message.includes('Session closed') || message.includes('Target closed'))) {
+    if (message.includes('Protocol error') &&
+      (message.includes('Session closed') || message.includes('Target closed'))) {
       console.debug(`[Global] Ignoring expected WhatsApp protocol error: ${message}`);
       return; // Don't crash on expected protocol errors
     }
   }
-  
+
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   // For other errors, log but don't crash the server
 });
 
 process.on('uncaughtException', (error) => {
-  if (error.message.includes('Protocol error') && 
-      (error.message.includes('Session closed') || error.message.includes('Target closed'))) {
+  if (error.message.includes('Protocol error') &&
+    (error.message.includes('Session closed') || error.message.includes('Target closed'))) {
     console.debug(`[Global] Ignoring expected WhatsApp protocol error: ${error.message}`);
     return; // Don't crash on expected protocol errors
   }
-  
+
   console.error('Uncaught Exception:', error);
   // For critical errors, we might want to restart, but let's try to continue
 });
@@ -38,10 +37,6 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug'], // Set logging levels
   });
-
-  // Increase payload size limit for JSON and URL-encoded requests
-  app.use(bodyParser.json({ limit: '200mb' })); // Set limit to 200MB
-  app.use(bodyParser.urlencoded({ limit: '200mb', extended: true })); // Set limit to 200MB
 
   // Security middleware
   app.use(helmet());
@@ -89,7 +84,7 @@ async function bootstrap() {
   // WebSocket adapter
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 4081;
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
 
   await app.listen(port, () => {

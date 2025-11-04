@@ -16,10 +16,10 @@ export class MessageLimitGuard implements CanActivate {
   ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
-    const userJwt = request.user; // from JWT (contains user.sub)
+    const { user } = context.switchToHttp().getRequest();
+    // const userJwt = request.user; // from JWT (contains user.sub)
 
-    const user = await this.userModel.findById(userJwt.sub).lean();
+    // const user = await this.userModel.findById(userJwt.sub).lean();
 
     if (!user) {
       throw new ForbiddenException('User not found.');

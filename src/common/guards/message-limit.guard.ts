@@ -16,7 +16,7 @@ export class MessageLimitGuard implements CanActivate {
   ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const { request } = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest();
     const userJwt = request.user; // from JWT (contains user.sub)
 
     console.log(userJwt);

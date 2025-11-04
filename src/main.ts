@@ -6,7 +6,6 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import helmet from 'helmet';
 import * as compression from 'compression';
 import * as cookieParser from 'cookie-parser';
-import * as bodyParser from 'body-parser';
 
 // Global error handlers for WhatsApp protocol errors
 process.on('unhandledRejection', (reason, promise) => {
@@ -38,11 +37,6 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug'], // Set logging levels
   });
-
-  // Increase payload size limit for JSON and URL-encoded requests
-  app.use(bodyParser.json({ limit: '200mb' })); // Set limit to 200MB
-  app.use(bodyParser.urlencoded({ limit: '200mb', extended: true })); // Set limit to 200MB
-
 
   // Security middleware
   app.use(helmet());

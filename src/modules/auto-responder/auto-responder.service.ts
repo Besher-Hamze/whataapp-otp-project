@@ -118,7 +118,7 @@ export class AutoResponderService {
       accountStats.rulesMatched++;
 
       // ✅ Send auto-response
-      const response = await this.sendAutoResponse(account.clientId, sender, matchingRule.response);
+      const response = await this.sendAutoResponse(account.clientId, sender, matchingRule.response, account.user.toString());
       const responseTime = Date.now() - startTime;
 
       if (response.success) {
@@ -279,13 +279,15 @@ export class AutoResponderService {
   /**
    * Send auto-response with error handling
    */
-  private async sendAutoResponse(clientId: string, sender: string, responseText: string): Promise<{ success: boolean, error?: string, messageId?: string }> {
+  private async sendAutoResponse(clientId: string, sender: string, responseText: string, userId: string): Promise<{ success: boolean, error?: string, messageId?: string }> {
     try {
       const result = await this.whatsAppService.sendMessage(
         clientId,
         [sender],
         responseText,
-        1000 // 1 second delay
+        1000, // 1 second delay
+        undefined,
+        userId
       );
 
       if (result && (result.results?.[0]?.status === 'sent' || result.results?.[0]?.status === 'likely_sent')) {

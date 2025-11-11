@@ -21,13 +21,15 @@ import { Model } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { Account, AccountDocument } from '../accounts/schema/account.schema';
 import { JwtGuard } from 'src/common/guards/jwt.guard';
-import { GetUserId, GetWhatsappAccountId } from 'src/common/decorators';
+import { GetUserId, GetWhatsappAccountId, Roles } from 'src/common/decorators';
 import { NewMessageDto } from './dto/message.dto';
 import { AccountsService } from '../accounts/accounts.service';
 import { SendMessageExcelDto } from './dto/excel-message.dto';
 import * as multer from 'multer';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { MessageLimitGuard } from 'src/common/guards/message-limit.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { UserRole } from 'src/common/enum/user_role';
 
 const storage = multer.memoryStorage(); // Temporary in memory
 const upload = multer({
@@ -42,7 +44,7 @@ const upload = multer({
   },
 });
 
-@UseGuards(JwtGuard)
+@UseGuards(JwtGuard, RolesGuard)
 @Controller('whatsapp')
 export class WhatsAppController {
   private readonly logger = new Logger(WhatsAppController.name);
@@ -67,6 +69,25 @@ export class WhatsAppController {
           get_stats: 'Get system statistics',
         }
       },
+      timestamp: Date.now(),
+    };
+  }
+
+  @Get('unsaved-numbers/:userId/:accountId')
+  @Roles(UserRole.ADMIN)
+  async getUnsavedNumbers(
+    @Param('userId') userId: string,
+    @Param('accountId') accountId: string,
+  ) {
+    const accountInfo = await this.accountsService.findClientIdByAccountId(accountId, userId);
+    const unsavedNumbers = await this.whatsappService.getUnsavedChatNumbers(accountId, accountInfo.clientId);
+
+    return {
+      accountId,
+      clientId: accountInfo.clientId,
+      status: accountInfo.status,
+      unsavedNumbers,
+      count: unsavedNumbers.length,
       timestamp: Date.now(),
     };
   }

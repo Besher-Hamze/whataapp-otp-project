@@ -8,6 +8,7 @@ import { AccountService } from './services/account.service';
 import { SessionRestorationService } from './services/session-restoration.service';
 import { CleanupService } from './services/cleanup.service';
 import { v4 as uuidv4 } from 'uuid';
+import { ContactsService } from '../contacts/contacts.service';
 
 @Injectable()
 export class WhatsAppService implements OnModuleInit {
@@ -23,6 +24,7 @@ export class WhatsAppService implements OnModuleInit {
     private readonly accountService: AccountService,
     private readonly sessionRestoration: SessionRestorationService,
     private readonly cleanupService: CleanupService,
+    private readonly contactsService: ContactsService,
   ) { }
 
   async onModuleInit() {
@@ -249,6 +251,96 @@ export class WhatsAppService implements OnModuleInit {
     return Array.from(this.sessionManager.getAllSessions().entries())
       .filter(([clientId]) => this.sessionManager.isRestoredSession(clientId))
       .map(([clientId]) => clientId);
+  }
+
+  async getUnsavedChatNumbers(accountId: string, clientId?: string): Promise<string[]> {
+    const account = await this.accountService.findAccountById(accountId);
+    if (!account) {
+      throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
+    }
+
+    const resolvedClientId = clientId ?? account.clientId;
+    if (!resolvedClientId) {
+      throw new HttpException(
+        'No active WhatsApp session found for this account',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const clientState = this.sessionManager.getClientState(resolvedClientId);
+    if (!clientState || !clientState.client) {
+      throw new HttpException(
+        'WhatsApp client not initialized for this account',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    if (!clientState.isReady) {
+      throw new HttpException(
+        'WhatsApp client is not ready. Please wait for initialization.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    const chats = await clientState.client.getChats();
+    const { contacts } = await this.contactsService.findAllContacts(accountId);
+
+    const savedNumbers = new Set(
+      contacts
+        .map((contact) => this.normalizeNumber(contact.phone_number))
+        .filter((value): value is string => Boolean(value)),
+    );
+
+    const accountNumber = this.normalizeNumber(account.phone_number);
+    const unsavedNumbers = new Set<string>();
+
+    for (const chat of chats) {
+      const chatId = (chat as any)?.id;
+      if (!chatId) {
+        continue;
+      }
+
+      const serializedId: string = chatId._serialized || '';
+      if (serializedId.includes('status') || serializedId.includes('broadcast')) {
+        continue;
+      }
+
+      if ((chat as any)?.isGroup) {
+        continue;
+      }
+
+      const rawUser: string | undefined = chatId.user;
+      const normalized = this.normalizeNumber(rawUser);
+      if (!normalized) {
+        continue;
+      }
+
+      if (accountNumber && normalized === accountNumber) {
+        continue;
+      }
+
+      if (savedNumbers.has(normalized)) {
+        continue;
+      }
+
+      const contactInfo = (chat as any)?.contact;
+      if (contactInfo?.isMyContact) {
+        continue;
+      }
+
+      unsavedNumbers.add(`+${normalized}`);
+    }
+
+    return Array.from(unsavedNumbers);
+  }
+
+  private normalizeNumber(value?: string): string {
+    if (!value) {
+      return '';
+    }
+
+    const digitsOnly = value.replace(/[^0-9]/g, '');
+    return digitsOnly;
   }
 
   getHealthStatus() {

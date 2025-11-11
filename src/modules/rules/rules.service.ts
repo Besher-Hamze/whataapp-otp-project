@@ -3,7 +3,7 @@ import { CreateRuleDto } from './dto/create-rule.dto';
 import { UpdateRuleDto } from './dto/update-rule.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Rule, RuleDocument } from './schema/rules.schema';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 @Injectable()
 export class RulesService {
@@ -45,7 +45,8 @@ export class RulesService {
 
 
   async findAllRules(accountId: string): Promise<Rule[]> {
-    return this.ruleModel.find({ account: accountId }).exec();
+    const objectAccountId = new Types.ObjectId(accountId);
+    return this.ruleModel.find({ account: objectAccountId }).exec();
   }
 
   async findRuleById(id: string, accountId: string): Promise<Rule | null> {

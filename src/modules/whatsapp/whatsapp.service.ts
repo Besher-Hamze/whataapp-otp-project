@@ -283,12 +283,12 @@ export class WhatsAppService implements OnModuleInit {
     }
 
     const chats = await clientState.client.getChats();
-    const { contacts } = await this.contactsService.findAllContacts(accountId);
+    // const { contacts } = await this.contactsService.findAllContacts(accountId);
 
     const savedNumbers = new Set(
-      contacts
-        .map((contact) => this.normalizeNumber(contact.phone_number))
-        .filter((value): value is string => Boolean(value)),
+      // contacts
+      //   .map((contact) => this.normalizeNumber(contact.phone_number))
+      //   .filter((value): value is string => Boolean(value)),
     );
 
     const accountNumber = this.normalizeNumber(account.phone_number);

@@ -1,6 +1,6 @@
 // src/whatsapp/services/event-handler.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { Client, Message , Contact} from 'whatsapp-web.js';
+import { Client, Message, Contact } from 'whatsapp-web.js';
 import * as libphonenumber from 'libphonenumber-js'; // Import libphonenumber-js
 import { QRCodeService } from './qr-code.service';
 import { MessageHandlerService } from './message-handler.service';
@@ -25,11 +25,11 @@ interface SessionState {
 
 @Injectable()
 export class EventHandlerService {
-        private readonly logger = new Logger(EventHandlerService.name);
+    private readonly logger = new Logger(EventHandlerService.name);
     private readonly sessionStates = new Map<string, SessionState>();
-        private readonly validCountryCodes = new Set(['+1', '+20', '+33', '+34', '+39', '+41', '+43', '+44', '+45', '+46', '+47', '+48', '+49', '+51', '+52', '+53', '+54', '+55', '+56', '+57', '+58', '+60', '+61', '+62', '+63', '+64', '+65', '+66', '+81', '+82', '+84', '+86', '+90', '+91', '+92', '+93', '+94', '+95', '+98', '+212', '+213', '+216', '+218', '+220', '+221', '+222', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+230', '+231', '+232', '+233', '+234', '+235', '+236', '+237', '+238', '+239', '+240', '+241', '+242', '+243', '+244', '+245', '+246', '+247', '+248', '+249', '+250', '+251', '+252', '+253', '+254', '+255', '+256', '+257', '+258', '+260', '+261', '+262', '+263', '+264', '+265', '+266', '+267', '+268', '+269', '+290', '+291', '+297', '+298', '+299', '+350', '+351', '+352', '+353', '+354', '+355', '+356', '+357', '+358', '+359', '+370', '+371', '+372', '+373', '+374', '+375', '+376', '+377', '+378', '+379', '+380', '+381', '+382', '+383', '+385', '+386', '+387', '+389', '+420', '+421', '+423', '+500', '+501', '+502', '+503', '+504', '+505', '+506', '+507', '+508', '+509', '+590', '+591', '+592', '+593', '+594', '+595', '+596', '+597', '+598', '+599', '+670', '+671', '+672', '+673', '+674', '+675', '+676', '+677', '+678', '+679', '+680', '+681', '+682', '+683', '+685', '+686', '+687', '+688', '+689', '+690', '+691', '+692', '+850', '+852', '+853', '+855', '+856', '+870', '+880', '+886', '+960', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+972', '+973', '+974', '+975', '+976', '+977', '+992', '+993', '+994', '+995', '+996', '+998']);
-    
-        constructor(
+    private readonly validCountryCodes = new Set(['+1', '+20', '+33', '+34', '+39', '+41', '+43', '+44', '+45', '+46', '+47', '+48', '+49', '+51', '+52', '+53', '+54', '+55', '+56', '+57', '+58', '+60', '+61', '+62', '+63', '+64', '+65', '+66', '+81', '+82', '+84', '+86', '+90', '+91', '+92', '+93', '+94', '+95', '+98', '+212', '+213', '+216', '+218', '+220', '+221', '+222', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+230', '+231', '+232', '+233', '+234', '+235', '+236', '+237', '+238', '+239', '+240', '+241', '+242', '+243', '+244', '+245', '+246', '+247', '+248', '+249', '+250', '+251', '+252', '+253', '+254', '+255', '+256', '+257', '+258', '+260', '+261', '+262', '+263', '+264', '+265', '+266', '+267', '+268', '+269', '+290', '+291', '+297', '+298', '+299', '+350', '+351', '+352', '+353', '+354', '+355', '+356', '+357', '+358', '+359', '+370', '+371', '+372', '+373', '+374', '+375', '+376', '+377', '+378', '+379', '+380', '+381', '+382', '+383', '+385', '+386', '+387', '+389', '+420', '+421', '+423', '+500', '+501', '+502', '+503', '+504', '+505', '+506', '+507', '+508', '+509', '+590', '+591', '+592', '+593', '+594', '+595', '+596', '+597', '+598', '+599', '+670', '+671', '+672', '+673', '+674', '+675', '+676', '+677', '+678', '+679', '+680', '+681', '+682', '+683', '+685', '+686', '+687', '+688', '+689', '+690', '+691', '+692', '+850', '+852', '+853', '+855', '+856', '+870', '+880', '+886', '+960', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+972', '+973', '+974', '+975', '+976', '+977', '+992', '+993', '+994', '+995', '+996', '+998']);
+
+    constructor(
         private readonly qrCodeService: QRCodeService,
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
         private readonly messageHandler: MessageHandlerService,
@@ -236,82 +236,87 @@ export class EventHandlerService {
 
         await this.sessionManager.saveSessionState(clientId);
         const isRestored = this.sessionManager.isRestoredSession(clientId);
-        await new Promise(resolve => setTimeout(resolve, 5000)); 
-const allContacts = await client.getContacts();
+        await new Promise(resolve => setTimeout(resolve, 5000));
 
-    const savedContacts = allContacts.filter((contact: Contact) => {
-      if (!contact.id || !contact.id._serialized || !contact.id.user) return false;
+        try {
+            const allContacts = await client.getContacts();
 
-      const jid = contact.id._serialized;
-      const rawNumber = contact.id.user;
+            const savedContacts = allContacts.filter((contact: Contact) => {
+                if (!contact.id || !contact.id._serialized || !contact.id.user) return false;
 
-      // Basic checks
-      if (!contact.isMyContact || !contact.isUser || contact.isGroup || jid.includes('@broadcast')) {
-        return false;
-      }
+                const jid = contact.id._serialized;
+                const rawNumber = contact.id.user;
 
-      // Validate phone number using libphonenumber
-      try {
-        const phoneNumber = libphonenumber.parsePhoneNumberFromString(`+${rawNumber}`);
-        if (!phoneNumber) return false;
+                // Basic checks
+                if (!contact.isMyContact || !contact.isUser || contact.isGroup || jid.includes('@broadcast')) {
+                    return false;
+                }
 
-        const countryCode = `+${phoneNumber.countryCallingCode}`;
-        if (!this.validCountryCodes.has(countryCode)) return false;
+                // Validate phone number using libphonenumber
+                try {
+                    const phoneNumber = libphonenumber.parsePhoneNumberFromString(`+${rawNumber}`);
+                    if (!phoneNumber) return false;
 
-        // Enforce country-specific length limits
-        const nationalNumber = phoneNumber.nationalNumber.toString();
+                    const countryCode = `+${phoneNumber.countryCallingCode}`;
+                    if (!this.validCountryCodes.has(countryCode)) return false;
 
-        const limits = lengthLimits[countryCode];
-        if (nationalNumber.length < limits[0] || nationalNumber.length > limits[1]) {
-        this.logger.debug(`Rejected ${rawNumber}: National number length ${nationalNumber.length} outside ${limits[0]}-${limits[1]}`);
-        return false;
+                    // Enforce country-specific length limits
+                    const nationalNumber = phoneNumber.nationalNumber.toString();
+
+                    const limits = lengthLimits[countryCode];
+                    if (nationalNumber.length < limits[0] || nationalNumber.length > limits[1]) {
+                        this.logger.debug(`Rejected ${rawNumber}: National number length ${nationalNumber.length} outside ${limits[0]}-${limits[1]}`);
+                        return false;
+                    }
+
+
+                    return phoneNumber.isValid();
+                } catch (e) {
+                    this.logger.debug(`Rejected ${rawNumber}: Invalid format - ${e.message}`);
+                    return false;
+                }
+            });
+
+            // Deduplicate and save contacts
+            const seenNumbers = new Set<string>();
+            for (const contact of savedContacts) {
+                const rawNumber = contact.id.user;
+                const phoneNumber = `+${rawNumber}`;
+                if (seenNumbers.has(phoneNumber)) continue;
+                seenNumbers.add(phoneNumber);
+
+                const displayName = contact.name || contact.pushname || 'Unnamed';
+
+                const createContactDto: CreateContactDto = {
+                    name: displayName,
+                    phone_number: phoneNumber,
+                    account: accountId,
+                };
+
+                try {
+                    await this.contactService.create(createContactDto, accountId);
+                    this.logger.log(`[EventHandlerService] Created new contact: ${displayName} (${phoneNumber}) for account ${accountId}`);
+                } catch (err) {
+                    this.logger.warn(`⚠️ Skipped contact ${phoneNumber}: ${err.message}`);
+                }
+            }
+        } catch (err) {
+            this.logger.warn(`⚠️ Skipped loading/saving contacts for ${clientId}: ${err?.message ?? err}`);
         }
 
+        emit('ready', {
+            phoneNumber,
+            name,
+            clientId,
+            status: 'active',
+            isRestored,
+            message: isRestored
+                ? 'WhatsApp session restored successfully.'
+                : 'WhatsApp client ready and account saved/updated.',
+        });
 
-        return phoneNumber.isValid();
-      } catch (e) {
-        this.logger.debug(`Rejected ${rawNumber}: Invalid format - ${e.message}`);
-        return false;
-      }
-    });
-
-    // Deduplicate and save contacts
-    const seenNumbers = new Set<string>();
-    for (const contact of savedContacts) {
-      const rawNumber = contact.id.user;
-      const phoneNumber = `+${rawNumber}`;
-      if (seenNumbers.has(phoneNumber)) continue;
-      seenNumbers.add(phoneNumber);
-
-      const displayName = contact.name || contact.pushname || 'Unnamed';
-
-      const createContactDto: CreateContactDto = {
-        name: displayName,
-        phone_number: phoneNumber,
-        account: accountId,
-      };
-
-      try {
-        await this.contactService.create(createContactDto, accountId);
-        this.logger.log(`[EventHandlerService] Created new contact: ${displayName} (${phoneNumber}) for account ${accountId}`);
-      } catch (err) {
-        this.logger.warn(`⚠️ Skipped contact ${phoneNumber}: ${err.message}`);
-      }
+        this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
     }
-
-    emit('ready', {
-        phoneNumber,
-        name,
-        clientId,
-        status: 'active',
-        isRestored,
-        message: isRestored
-            ? 'WhatsApp session restored successfully.'
-            : 'WhatsApp client ready and account saved/updated.',
-    });
-
-    this.logger.log(`🎉 Client ${clientId} is ready (${isRestored ? 'restored' : 'new'} session)`);
-}
 
 
 

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
@@ -17,6 +17,7 @@ export class SessionRecoveryService {
     constructor(
         @InjectModel(Account.name) private readonly accountModel: Model<AccountDocument>,
         private readonly sessionManager: SessionManagerService,
+        @Inject(forwardRef(() => EventHandlerService))
         private readonly eventHandler: EventHandlerService,
     ) { }
 

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { SessionManagerService } from './session-manager.service';
 import { SessionRecoveryService } from './session-recovery.service';
 
@@ -14,6 +14,7 @@ export class ReconnectionService {
 
     constructor(
         private readonly sessionManager: SessionManagerService,
+        @Inject(forwardRef(() => SessionRecoveryService))
         private readonly sessionRecovery: SessionRecoveryService,
     ) { }
 

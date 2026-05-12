@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 @Injectable()
 export class PuppeteerConfigService {
     getConfig() {
+        const protocolTimeoutMs = Number(process.env.PUPPETEER_PROTOCOL_TIMEOUT_MS) || 120_000;
         return {
             headless: true,
             args: [
@@ -29,13 +30,11 @@ export class PuppeteerConfigService {
                 '--disable-component-update',
                 '--disable-domain-reliability',
                 '--disable-features=AudioServiceOutOfProcess',
-                '--single-process',
                 '--memory-pressure-off',
                 '--max_old_space_size=4096',
             ],
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-            // timeout: 60000,
-            // protocolTimeout: 60000,
+            protocolTimeout: protocolTimeoutMs,
         };
     }
 }

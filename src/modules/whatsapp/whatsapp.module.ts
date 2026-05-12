@@ -25,6 +25,7 @@ import { PuppeteerConfigService } from './services/puppeteer-config.service';
 import { SessionRestorationService } from './services/session-restoration.service';
 import { CleanupService } from './services/cleanup.service';
 import { ReconnectionService } from './services/reconnection.service';
+import { SessionRecoveryService } from './services/session-recovery.service';
 import { ProtocolErrorHandlerService } from './services/protocol-error-handler.service';
 import { Contact, ContactSchema } from '../contacts/schema/contacts.schema';
 import { Group, GroupSchema } from '../groups/schema/groups.schema';
@@ -68,6 +69,7 @@ import { Template, TemplateSchema } from '../templates/schema/template.schema';
     SessionRestorationService,
     CleanupService,
     ReconnectionService,
+    SessionRecoveryService,
     ProtocolErrorHandlerService,
   ],
   exports: [WhatsAppService]

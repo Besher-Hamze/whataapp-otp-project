@@ -8,6 +8,7 @@ import * as mime from 'mime-types';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../../users/schema/users.schema';
+import { ReconnectionService } from './reconnection.service';
 
 interface MessageResult {
   recipient: string;
@@ -29,17 +30,27 @@ interface SendProgress {
 export class MessageSenderService {
   private readonly logger = new Logger(MessageSenderService.name);
 
-  // Known whatsapp-web.js errors that indicate successful send
+  // Narrow patterns: message often delivered but library failed to return a serialized Message
   private readonly KNOWN_SUCCESS_ERRORS = [
     'getMessageModel',
-    'serialize',
-    'Cannot read properties of undefined',
     'msg.serialize is not a function',
     'Cannot read property \'serialize\'',
   ];
 
+  private readonly STALE_SESSION_ERRORS = [
+    'Execution context was destroyed',
+    'Protocol error',
+    'Session closed',
+    'Target closed',
+    'Cannot find context with specified id',
+    'Navigation failed',
+    'net::ERR_',
+    'getState timeout',
+  ];
+
   constructor(
     private readonly sessionManager: SessionManagerService,
+    private readonly reconnectionService: ReconnectionService,
     private readonly recipientResolver: RecipientResolverService,
     private readonly contentResolver: MessageContentResolverService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -242,17 +253,30 @@ export class MessageSenderService {
       throw new HttpException('WhatsApp client is not ready. Please wait for initialization.', HttpStatus.SERVICE_UNAVAILABLE);
     }
 
+    const stateTimeoutMs = Number(process.env.WHATSAPP_GETSTATE_TIMEOUT_MS) || 12_000;
+
     try {
-      const state = await clientState.client.getState();
+      const state = await Promise.race([
+        clientState.client.getState(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('getState timeout')), stateTimeoutMs),
+        ),
+      ]);
       this.logger.debug(`🔍 Client ${clientId} state: ${state}`);
 
-      // Allow CONNECTED, OPENING, or similar states
-      if (!['CONNECTED', 'OPENING'].includes(state)) {
-        this.logger.warn(`⚠️ Client ${clientId} state is ${state}, but proceeding`);
+      if (state !== 'CONNECTED') {
+        this.markSessionUnhealthy(clientId, `Pre-send state is ${state}`);
+        throw new HttpException(
+          `WhatsApp client is ${state}. Session recovery started — retry shortly.`,
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
       }
-    } catch (error) {
-      this.logger.warn(`⚠️ Could not get client state for ${clientId}: ${error.message}`);
-      // Don't throw here, as state check might fail but sending might still work
+    } catch (error: any) {
+      this.markSessionUnhealthy(clientId, `State check failed: ${error?.message || error}`);
+      throw new HttpException(
+        'WhatsApp session is unhealthy and recovery has started. Please retry in a few seconds.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
     }
   }
 
@@ -301,9 +325,10 @@ export class MessageSenderService {
       });
 
       // Update session activity
-      this.sessionManager.updateClientState(clientState.client.options.authStrategy.clientId, {
-        lastActivity: Date.now()
-      });
+      const sid = this.extractClientId(clientState);
+      if (sid) {
+        this.sessionManager.updateClientState(sid, { lastActivity: Date.now() });
+      }
 
       // Wait between batches
       if (i + batchSize < recipients.length) {
@@ -344,19 +369,31 @@ export class MessageSenderService {
 
       return { recipient, status: 'sent' };
     } catch (error: any) {
+      const clientId = this.extractClientId(clientState);
+      const msg = error?.message || '';
+
+      if (clientId && this.isStaleSessionError(msg)) {
+        this.markSessionUnhealthy(clientId, `File send: ${msg}`);
+        return {
+          recipient,
+          status: 'failed',
+          error: 'Session became unhealthy and is recovering. Retry this send.',
+        };
+      }
+
       const knownSerializeError =
-        error?.message?.includes('getMessageModel') ||
-        error?.message?.includes('serialize');
+        msg.includes('getMessageModel') ||
+        msg.includes('msg.serialize is not a function') ||
+        msg.includes("Cannot read property 'serialize'");
 
       if (knownSerializeError) {
-        this.logger.warn(`⚠️ File likely sent, but confirmation failed for ${recipient}: ${error.message}`);
-        // Increment message count for likely sent
+        this.logger.warn(`⚠️ File likely sent, but confirmation failed for ${recipient}: ${msg}`);
         await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
         return { recipient, status: 'likely_sent', warning: 'Sent but confirmation failed' };
-      } else {
-        this.logger.error(`❌ Failed to send file to ${recipient}: ${error.message}`);
-        return { recipient, status: 'failed', error: error.message };
       }
+
+      this.logger.error(`❌ Failed to send file to ${recipient}: ${msg}`);
+      return { recipient, status: 'failed', error: msg || 'Unknown error' };
     }
   }
 
@@ -418,11 +455,10 @@ export class MessageSenderService {
         summary.completed++;
       });
 
-      // Update session activity
-      this.sessionManager.updateClientState(
-        clientState.client.options.authStrategy.clientId,
-        { lastActivity: Date.now() }
-      );
+      const sid = this.extractClientId(clientState);
+      if (sid) {
+        this.sessionManager.updateClientState(sid, { lastActivity: Date.now() });
+      }
 
       // Wait between batches (minimum 5s for files)
       if (i + batchSize < recipients.length) {
@@ -459,7 +495,7 @@ export class MessageSenderService {
       };
 
     } catch (error: any) {
-      return this.handleSendError(recipient, error);
+      return await this.handleSendError(recipient, error, this.extractClientId(clientState));
     }
   }
 
@@ -488,14 +524,26 @@ export class MessageSenderService {
       };
 
     } catch (error: any) {
-      return this.handleSendError(recipient, error);
+      return await this.handleSendError(recipient, error, this.extractClientId(clientState));
     }
   }
 
-  private handleSendError(recipient: string, error: any): MessageResult {
+  private async handleSendError(
+    recipient: string,
+    error: any,
+    clientId?: string,
+  ): Promise<MessageResult> {
     const errorMessage = error?.message || 'Unknown error';
 
-    // ✅ Check for known "success" errors (message sent but confirmation failed)
+    if (clientId && this.isStaleSessionError(errorMessage)) {
+      this.markSessionUnhealthy(clientId, `Send error: ${errorMessage}`);
+      return {
+        recipient,
+        status: 'failed',
+        error: 'Session became unhealthy and is recovering. Retry this send.',
+      };
+    }
+
     const isKnownSuccessError = this.KNOWN_SUCCESS_ERRORS.some(knownError =>
       errorMessage.includes(knownError)
     );
@@ -509,7 +557,6 @@ export class MessageSenderService {
       };
     }
 
-    // Check for other common recoverable errors
     if (errorMessage.includes('Rate limit') || errorMessage.includes('too many')) {
       this.logger.warn(`🚫 Rate limited for ${recipient}: ${errorMessage}`);
       return {
@@ -519,13 +566,30 @@ export class MessageSenderService {
       };
     }
 
-    // Unknown error
     this.logger.error(`❌ Failed to send to ${recipient}: ${errorMessage}`);
     return {
       recipient,
       status: 'failed',
       error: errorMessage
     };
+  }
+
+  private isStaleSessionError(message: string): boolean {
+    return this.STALE_SESSION_ERRORS.some(s => message.includes(s));
+  }
+
+  private extractClientId(clientState: ClientState | any): string | undefined {
+    const unsafeClient = clientState?.client as any;
+    return unsafeClient?.options?.authStrategy?.clientId;
+  }
+
+  private markSessionUnhealthy(clientId: string, reason: string): void {
+    this.logger.warn(`⚠️ Marking ${clientId} unhealthy: ${reason}`);
+    this.sessionManager.updateClientState(clientId, {
+      isReady: false,
+      lastActivity: Date.now(),
+    });
+    void this.reconnectionService.handleReconnection(clientId);
   }
 
   private formatChatId(recipient: string): string {

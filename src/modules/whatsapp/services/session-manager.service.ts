@@ -121,15 +121,16 @@ export class SessionManagerService implements OnModuleInit {
         }
     }
 
-    removeSession(clientId: string): void {
+    removeSession(clientId: string, options?: { preserveSocketMappings?: boolean }): void {
         this.clientStates.delete(clientId);
         this.clientReadyPromises.delete(clientId);
         this.restoredSessions.delete(clientId);
 
-        // Remove from socket mapping
-        for (const [socketId, mappedClientId] of this.socketClientMap.entries()) {
-            if (mappedClientId === clientId) {
-                this.socketClientMap.delete(socketId);
+        if (!options?.preserveSocketMappings) {
+            for (const [socketId, mappedClientId] of this.socketClientMap.entries()) {
+                if (mappedClientId === clientId) {
+                    this.socketClientMap.delete(socketId);
+                }
             }
         }
     }

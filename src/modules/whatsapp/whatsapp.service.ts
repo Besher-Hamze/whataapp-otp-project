@@ -7,6 +7,7 @@ import { FileManagerService } from './services/file-manager.service';
 import { AccountService } from './services/account.service';
 import { SessionRestorationService } from './services/session-restoration.service';
 import { CleanupService } from './services/cleanup.service';
+import { ReconnectionService } from './services/reconnection.service';
 import { v4 as uuidv4 } from 'uuid';
 import { ContactsService } from '../contacts/contacts.service';
 
@@ -25,6 +26,7 @@ export class WhatsAppService implements OnModuleInit {
     private readonly sessionRestoration: SessionRestorationService,
     private readonly cleanupService: CleanupService,
     private readonly contactsService: ContactsService,
+    private readonly reconnectionService: ReconnectionService,
   ) { }
 
   async onModuleInit() {
@@ -42,7 +44,44 @@ export class WhatsAppService implements OnModuleInit {
       this.cleanupService.cleanupInactiveSessions();
     }, 600000);
 
+    // Proactively detect dead Puppeteer / WhatsApp connections (avoids needing PM2 restarts)
+    const healthIntervalMs = Number(process.env.WHATSAPP_SESSION_HEALTH_MS) || 15 * 60 * 1000;
+    setInterval(() => {
+      void this.probeStaleSessions();
+    }, healthIntervalMs);
+
     this.logger.log('✅ WhatsApp Service initialized successfully');
+  }
+
+  /**
+   * If the in-memory client thinks it is ready but WhatsApp is not CONNECTED, trigger reconnect / rebuild.
+   */
+  private async probeStaleSessions(): Promise<void> {
+    const sessions = this.sessionManager.getAllSessions();
+    const stateTimeoutMs = Number(process.env.WHATSAPP_GETSTATE_TIMEOUT_MS) || 12_000;
+
+    for (const [clientId, state] of sessions) {
+      if (!state.isReady || state.isSending || !state.client) {
+        continue;
+      }
+
+      try {
+        const ws = await Promise.race([
+          state.client.getState(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('getState timeout')), stateTimeoutMs),
+          ),
+        ]);
+
+        if (ws !== 'CONNECTED') {
+          this.logger.warn(`Session health: ${clientId} in state "${ws}", starting recovery`);
+          void this.reconnectionService.handleReconnection(clientId);
+        }
+      } catch (e: any) {
+        this.logger.warn(`Session health: ${clientId} check failed (${e?.message}), starting recovery`);
+        void this.reconnectionService.handleReconnection(clientId);
+      }
+    }
   }
 
   async startSession(

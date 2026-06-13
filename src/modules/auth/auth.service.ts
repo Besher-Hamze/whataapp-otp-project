@@ -331,8 +331,36 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
     }
   }
 
-  async generateApiKey(userId: string, accountId: string): Promise<string> {  // Now takes accountId
-    // Validate account exists and belongs to user
+  async getActiveApiKeyForAccount(userId: string, accountId: string): Promise<string | null> {
+    const activeKeys = await this.apiKeyModel
+      .find({ userId, accountId, isActive: true })
+      .sort({ createdAt: 1 })
+      .exec();
+
+    if (activeKeys.length === 0) {
+      return null;
+    }
+
+    const primary = activeKeys[0];
+    if (activeKeys.length > 1) {
+      await this.apiKeyModel.updateMany(
+        { _id: { $in: activeKeys.slice(1).map(k => k._id) } },
+        { isActive: false },
+      );
+      this.logger.warn(`Deactivated ${activeKeys.length - 1} duplicate API key(s) for account ${accountId}`);
+    }
+
+    return primary.key;
+  }
+
+  /** Returns the existing key for this account, or creates one if none exists yet. */
+  async getOrCreateApiKey(userId: string, accountId: string): Promise<string> {
+    const existing = await this.getActiveApiKeyForAccount(userId, accountId);
+    if (existing) {
+      this.logger.debug(`Reusing API key for account ${accountId}`);
+      return existing;
+    }
+
     const accounts = await this.accountService.findAccountsByUser(userId);
     const account = accounts.find(acc => acc._id.toString() === accountId);
     if (!account) {
@@ -348,7 +376,12 @@ async login(loginDto: LoginDto): Promise<{ access_token: string; refresh_token: 
       createdAt: new Date(),
     });
 
+    this.logger.log(`Created API key for account ${accountId} (user ${userId})`);
     return apiKey;
+  }
+
+  async generateApiKey(userId: string, accountId: string): Promise<string> {
+    return this.getOrCreateApiKey(userId, accountId);
   }
 
   async removeAccountFromTokens(userId: string, accountId: string): Promise<void> {

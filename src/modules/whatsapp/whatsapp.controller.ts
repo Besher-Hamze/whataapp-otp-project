@@ -14,6 +14,8 @@ import {
   UploadedFile,
   UseInterceptors,
   Req,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppGateway } from './whatsapp.gateway';
@@ -30,6 +32,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { MessageLimitGuard } from 'src/common/guards/message-limit.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { UserRole } from 'src/common/enum/user_role';
+import { AuthService } from '../auth/auth.service';
 
 const storage = multer.memoryStorage(); // Temporary in memory
 const upload = multer({
@@ -54,7 +57,29 @@ export class WhatsAppController {
     private readonly whatsappGateway: WhatsAppGateway,
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private readonly accountsService: AccountsService,
+    @Inject(forwardRef(() => AuthService))
+    private readonly authService: AuthService,
   ) { }
+
+  private resolveLiveStatus(
+    dbStatus: string | undefined,
+    clientReady: boolean,
+    authState?: string,
+  ): string {
+    if (clientReady) {
+      return 'connected';
+    }
+    if (authState === 'needs_qr') {
+      return 'needs_qr';
+    }
+    if (dbStatus === 'authenticating') {
+      return 'authenticating';
+    }
+    if (dbStatus === 'ready' || dbStatus === 'active') {
+      return 'disconnected';
+    }
+    return dbStatus || 'disconnected';
+  }
 
   @Get('start')
   async startSession() {
@@ -517,15 +542,22 @@ export class WhatsAppController {
         accounts.map(async (account) => {
           let clientInfo = null;
           let clientReady = false;
+          const accountId = account._id.toString();
 
           if (account.clientId) {
             clientInfo = await this.whatsappService.getClientInfo(account.clientId) as any;
             clientReady = this.whatsappService.isClientReady(account.clientId);
           }
 
+          const apiKey = await this.authService.getActiveApiKeyForAccount(userId, accountId);
+          const authState = (account as any).sessionData?.authState as string | undefined;
+          const liveStatus = this.resolveLiveStatus(account.status, clientReady, authState);
+
           return {
             ...account,
             clientReady,
+            liveStatus,
+            apiKey,
             clientInfo: clientInfo ? {
               isReady: (clientInfo as any).isReady,
               isSending: (clientInfo as any).isSending,

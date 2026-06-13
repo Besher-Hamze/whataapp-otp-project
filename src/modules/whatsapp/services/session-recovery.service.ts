@@ -76,10 +76,7 @@ export class SessionRecoveryService {
 
         try {
             const client = await this.sessionManager.createSession(clientId, userId, true);
-            const silentEmit = (_event: string, _data: any) => {
-                /* restored / headless: no UI socket */
-            };
-            this.eventHandler.setupEventHandlers(client, clientId, silentEmit, userId);
+            this.eventHandler.setupRestoredSessionHandlers(client, clientId, userId);
 
             await this.withTimeout(
                 client.initialize(),
@@ -87,9 +84,13 @@ export class SessionRecoveryService {
                 `initialize-${clientId}`,
             );
 
-            const connected = await this.waitUntilConnected(client, clientId);
-            if (!connected) {
-                this.logger.error(`❌ Full session rebuild for ${clientId}: initialize finished but not CONNECTED`);
+            const authResult = await this.waitForConnected(client, clientId);
+            if (authResult !== 'ready') {
+                this.logger.error(`❌ Full session rebuild for ${clientId}: auth not restored (${authResult})`);
+                try {
+                    client.removeAllListeners();
+                    await client.destroy();
+                } catch { /* ignore */ }
                 this.sessionManager.removeSession(clientId, { preserveSocketMappings: true });
                 return false;
             }
@@ -110,26 +111,35 @@ export class SessionRecoveryService {
         }
     }
 
-    private async waitUntilConnected(client: Client, clientId: string): Promise<boolean> {
-        const pollMs = 2000;
-        const maxAttempts = 30;
+    private waitForConnected(
+        client: Client,
+        clientId: string,
+    ): Promise<'ready' | 'qr' | 'auth_failure' | 'timeout'> {
+        const timeoutMs = Number(process.env.WHATSAPP_RESTORE_AUTH_WAIT_MS) || 60_000;
 
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                const ws = await this.withTimeout(
-                    client.getState(),
-                    12_000,
-                    `getState-${clientId}`,
-                );
-                if (ws === 'CONNECTED') {
-                    return true;
-                }
-            } catch (e: any) {
-                this.logger.debug(`Rebuild state check ${attempt}/${maxAttempts} for ${clientId}: ${e?.message}`);
-            }
-            await new Promise(r => setTimeout(r, pollMs));
-        }
-        return false;
+        return new Promise((resolve) => {
+            let settled = false;
+
+            const finish = (result: 'ready' | 'qr' | 'auth_failure' | 'timeout') => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                client.off('ready', onReady);
+                client.off('qr', onQr);
+                client.off('auth_failure', onAuthFailure);
+                resolve(result);
+            };
+
+            const onReady = () => finish('ready');
+            const onQr = () => finish('qr');
+            const onAuthFailure = () => finish('auth_failure');
+
+            client.once('ready', onReady);
+            client.once('qr', onQr);
+            client.once('auth_failure', onAuthFailure);
+
+            const timer = setTimeout(() => finish('timeout'), timeoutMs);
+        });
     }
 
     private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

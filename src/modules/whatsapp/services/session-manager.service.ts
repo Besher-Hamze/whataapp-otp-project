@@ -26,6 +26,12 @@ export class SessionManagerService implements OnModuleInit {
     }
 
     async createSession(clientId: string, userId: string, isRestore: boolean = false): Promise<Client> {
+        const existing = this.clientStates.get(clientId);
+        if (existing?.client) {
+            this.logger.log(`♻️ Reusing existing in-memory session for ${clientId}`);
+            return existing.client;
+        }
+
         this.logger.log(`🚀 Creating ${isRestore ? 'restored' : 'new'} session for clientId: ${clientId}`);
 
         const client = new Client({

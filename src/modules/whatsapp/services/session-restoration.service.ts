@@ -1,23 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { Client } from 'whatsapp-web.js';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
 import { SessionManagerService } from './session-manager.service';
 import { EventHandlerService } from './event-handler.service';
 import { FileManagerService } from './file-manager.service';
-import { MessageHandlerService } from './message-handler.service'; // ✅ Add this import
+import { MessageHandlerService } from './message-handler.service';
 import * as path from 'path';
+
+type SessionAuthResult = 'ready' | 'qr' | 'auth_failure' | 'timeout';
 
 @Injectable()
 export class SessionRestorationService {
     private readonly logger = new Logger(SessionRestorationService.name);
+    private readonly AUTH_WAIT_MS = Number(process.env.WHATSAPP_RESTORE_AUTH_WAIT_MS) || 60_000;
+    private readonly RESTORE_GAP_MS = Number(process.env.WHATSAPP_RESTORE_GAP_MS) || 3000;
 
     constructor(
         @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
         private readonly sessionManager: SessionManagerService,
         private readonly eventHandler: EventHandlerService,
         private readonly fileManager: FileManagerService,
-        private readonly messageHandler: MessageHandlerService, // ✅ Add this dependency
+        private readonly messageHandler: MessageHandlerService,
     ) { }
 
     async loadClientsFromSessions() {
@@ -40,7 +45,7 @@ export class SessionRestorationService {
                 const sessionPath = path.join(process.cwd(), '.wwebjs_auth', folder);
 
                 if (!this.fileManager.isValidSession(sessionPath)) {
-                    this.logger.warn(`❌ Invalid session files for ${clientId}, cleaning up orphan session...`);
+                    this.logger.warn(`❌ Invalid or empty auth data for ${clientId}, skipping restore`);
                     if (!accountMap.has(clientId)) {
                         await this.fileManager.cleanupSessionFiles(clientId);
                     }
@@ -54,6 +59,11 @@ export class SessionRestorationService {
                     continue;
                 }
 
+                if (this.sessionManager.getClientState(clientId)) {
+                    this.logger.log(`✅ Session ${clientId} already loaded in memory, skipping...`);
+                    continue;
+                }
+
                 if (this.sessionManager.isClientReady(clientId)) {
                     this.logger.log(`✅ Session ${clientId} already active, skipping...`);
                     continue;
@@ -64,6 +74,7 @@ export class SessionRestorationService {
                 }
 
                 await this.restoreSessionSilently(clientId, account.user.toString());
+                await new Promise(r => setTimeout(r, this.RESTORE_GAP_MS));
             }
 
             this.logger.log(`✅ Session restoration completed. Active sessions: ${this.sessionManager.getActiveSessionCount()}`);
@@ -73,153 +84,94 @@ export class SessionRestorationService {
     }
 
     private async restoreSessionSilently(clientId: string, userId: string) {
+        let client: Client | undefined;
+
         try {
-            this.logger.log(`🔄 Restoring session ${clientId} silently with full message handling...`);
+            this.logger.log(`🔄 Restoring session ${clientId} silently...`);
 
-            const client = await this.sessionManager.createSession(clientId, userId, true);
+            client = await this.sessionManager.createSession(clientId, userId, true);
+            this.eventHandler.setupRestoredSessionHandlers(client, clientId, userId);
 
-            // ✅ OPTION 1: Use full event handlers for restored sessions (RECOMMENDED)
-            // Create a no-op emit function for restored sessions
-            const silentEmit = (event: string, data: any) => {
-                this.logger.debug(`📡 Silent restored session event: ${event} for ${clientId}`);
-                // You can add any silent event handling here if needed
-            };
-
-            // Set up FULL event handlers including message handling
-            this.eventHandler.setupEventHandlers(client, clientId, silentEmit, userId);
-
-            // ✅ ALTERNATIVE OPTION 2: Use enhanced restored session events (if you prefer minimal setup)
-            // this.setupEnhancedRestoredSessionEvents(client, clientId, userId);
-
-            // Initialize the client
             await client.initialize();
 
-            this.logger.log(`✅ Session ${clientId} restored successfully with full message handling`);
+            const authResult = await this.waitForSessionAuth(client, this.AUTH_WAIT_MS);
+            if (authResult !== 'ready') {
+                throw new Error(`Auth not restored (${authResult}) — QR scan required from the app`);
+            }
+
+            this.logger.log(`✅ Session ${clientId} restored and authenticated`);
         } catch (error) {
-            this.logger.error(`❌ Failed to restore session ${clientId}: ${error.message}`);
-
-            this.sessionManager.removeSession(clientId);
-
-            await this.accountModel.updateOne(
-                { clientId },
-                {
-                    $set: {
-                        status: 'disconnected',
-                        'sessionData.isAuthenticated': false,
-                        'sessionData.sessionValid': false,
-                        'sessionData.authState': 'failed',
-                    },
-                },
-            );
+            this.logger.warn(`⚠️ Could not restore session ${clientId}: ${error.message}`);
+            await this.teardownUnrestorableSession(clientId, client, String(error.message));
         }
     }
 
-    // ✅ ALTERNATIVE: Enhanced restored session events with message handling
-    private setupEnhancedRestoredSessionEvents(client: any, clientId: string, userId: string): void {
-        let isCleaningUp = false;
-        let isLoggedOut = false;
+    /**
+     * Resolves when the session reaches ready, needs QR, fails auth, or times out.
+     * QR during silent restore means on-disk auth is stale — caller should tear down the client.
+     */
+    waitForSessionAuth(client: Client, timeoutMs: number): Promise<SessionAuthResult> {
+        return new Promise((resolve) => {
+            let settled = false;
 
-        this.logger.log(`🔧 Setting up enhanced restored session events with message handling for ${clientId}`);
+            const finish = (result: SessionAuthResult) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                client.off('ready', onReady);
+                client.off('qr', onQr);
+                client.off('auth_failure', onAuthFailure);
+                resolve(result);
+            };
 
-        // ✅ CRITICAL: Add full message handling for restored sessions
-        client.on('message', async (message) => {
-            try {
-                if (isCleaningUp || isLoggedOut) return;
+            const onReady = () => finish('ready');
+            const onQr = () => finish('qr');
+            const onAuthFailure = () => finish('auth_failure');
 
-                this.logger.log(`📨 RESTORED SESSION - Message received for ${clientId} from ${message.from}`);
+            client.once('ready', onReady);
+            client.once('qr', onQr);
+            client.once('auth_failure', onAuthFailure);
 
-                // Update last activity
-                this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
-
-                // ✅ PROCESS MESSAGE THROUGH FULL PIPELINE (same as new sessions)
-                await this.messageHandler.handleIncomingMessage(message, clientId);
-
-                this.logger.log(`✅ RESTORED SESSION - Message processed for ${clientId}`);
-            } catch (error) {
-                this.logger.error(`❌ Error handling message in restored session ${clientId}: ${error.message}`);
-            }
+            const timer = setTimeout(() => finish('timeout'), timeoutMs);
         });
-
-        // Handle ready event
-        client.on('ready', async () => {
-            if (isCleaningUp || isLoggedOut) return;
-
-            this.sessionManager.updateClientState(clientId, {
-                isReady: true,
-                lastActivity: Date.now(),
-                reconnectAttempts: 0
-            });
-            await this.sessionManager.saveSessionState(clientId);
-
-            // ✅ Log message handler status for restored sessions
-            this.logger.log(`✅ Restored session ${clientId} is ready - Message handlers: ${this.messageHandler.getHandlerCount()}`);
-        });
-
-        // Handle disconnection
-        client.on('disconnected', async (reason: string) => {
-            if (isCleaningUp) return;
-
-            this.logger.warn(`🔌 Restored session ${clientId} disconnected: ${reason}`);
-            await this.sessionManager.markSessionAsDisconnected(clientId);
-            this.sessionManager.updateClientState(clientId, { isReady: false });
-
-            if (this.isLogoutReason(reason)) {
-                isLoggedOut = true;
-                isCleaningUp = true;
-
-                this.logger.log(`🔒 Session ${clientId} logged out, cleaning up...`);
-
-                try {
-                    client.removeAllListeners();
-                } catch (error) {
-                    this.logger.debug(`Could not remove listeners: ${error.message}`);
-                }
-
-                setTimeout(async () => {
-                    try {
-                        await this.cleanupLoggedOutSession(clientId);
-                    } catch (error) {
-                        this.logger.error(`❌ Logout cleanup failed for ${clientId}: ${error.message}`);
-                    }
-                }, 1000);
-            }
-        });
-
-        // Handle auth failure
-        client.on('auth_failure', async () => {
-            if (isCleaningUp || isLoggedOut) return;
-
-            this.logger.error(`🚫 Restored session ${clientId} auth failed`);
-            await this.sessionManager.markSessionAsDisconnected(clientId);
-            this.sessionManager.removeSession(clientId);
-        });
-
-        // Handle errors
-        client.on('error', (error: Error) => {
-            if (isCleaningUp || isLoggedOut) return;
-
-            if (error.message.includes('Protocol error') && error.message.includes('Session closed')) {
-                this.logger.debug(`Ignoring protocol error during logout for ${clientId}: ${error.message}`);
-                return;
-            }
-
-            this.logger.error(`❌ Restored session ${clientId} error: ${error.message}`);
-        });
-
-        // Handle authentication
-        client.on('authenticated', () => {
-            if (isCleaningUp || isLoggedOut) return;
-            this.logger.log(`🔐 Restored session ${clientId} authenticated`);
-            this.sessionManager.updateClientState(clientId, { lastActivity: Date.now() });
-        });
-
-        this.logger.log(`✅ Enhanced restored session events setup completed for ${clientId}`);
     }
 
-    // ✅ Keep the original minimal setup as a fallback option
-    private setupRestoredSessionEvents(client: any, clientId: string): void {
-        // ... keep your original implementation for backward compatibility
-        this.setupEnhancedRestoredSessionEvents(client, clientId, 'unknown');
+    private async teardownUnrestorableSession(
+        clientId: string,
+        client: Client | undefined,
+        reason: string,
+    ): Promise<void> {
+        const state = this.sessionManager.getClientState(clientId);
+        const activeClient = client ?? state?.client;
+
+        if (activeClient) {
+            try {
+                activeClient.removeAllListeners();
+            } catch { /* ignore */ }
+            try {
+                await activeClient.destroy();
+            } catch (e: any) {
+                this.logger.debug(`Destroy after failed restore for ${clientId}: ${e?.message}`);
+            }
+        }
+
+        this.sessionManager.removeSession(clientId);
+
+        await this.accountModel.updateOne(
+            { clientId },
+            {
+                $set: {
+                    status: 'disconnected',
+                    'sessionData.isAuthenticated': false,
+                    'sessionData.sessionValid': false,
+                    'sessionData.authState': 'needs_qr',
+                },
+            },
+        );
+
+        this.logger.warn(
+            `📵 Session ${clientId} stopped (${reason}). User must open the app and scan QR to reconnect.`,
+        );
     }
 
     private isLogoutReason(reason: string): boolean {
@@ -265,20 +217,28 @@ export class SessionRestorationService {
         try {
             this.logger.log(`🔄 Restoring specific session ${clientId} with events...`);
 
+            if (this.sessionManager.getClientState(clientId)) {
+                this.logger.log(`Session ${clientId} already exists in memory`);
+                return this.sessionManager.isClientReady(clientId);
+            }
+
             const client = await this.sessionManager.createSession(clientId, userId, true);
 
-            // ✅ ALWAYS use full event handlers for specific session restoration
             if (emit) {
-                this.eventHandler.setupEventHandlers(client, clientId, emit, userId);
+                this.eventHandler.setupEventHandlers(client, clientId, emit, userId, { enableQr: true });
             } else {
-                // Use silent emit for manual restoration
-                const silentEmit = (event: string, data: any) => {
-                    this.logger.debug(`📡 Silent manual session event: ${event} for ${clientId}`);
-                };
-                this.eventHandler.setupEventHandlers(client, clientId, silentEmit, userId);
+                this.eventHandler.setupRestoredSessionHandlers(client, clientId, userId);
             }
 
             await client.initialize();
+
+            if (!emit) {
+                const authResult = await this.waitForSessionAuth(client, this.AUTH_WAIT_MS);
+                if (authResult !== 'ready') {
+                    await this.teardownUnrestorableSession(clientId, client, `Auth not restored (${authResult})`);
+                    return false;
+                }
+            }
 
             this.logger.log(`✅ Session ${clientId} restored with full event handling`);
             return true;

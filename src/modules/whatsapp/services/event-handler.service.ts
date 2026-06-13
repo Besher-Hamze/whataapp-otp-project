@@ -44,7 +44,33 @@ export class EventHandlerService {
         client: Client,
         clientId: string,
         emit: (event: string, data: any) => void,
-        userId: string
+        userId: string,
+        options?: { enableQr?: boolean },
+    ): void {
+        this.setupSessionHandlers(client, clientId, emit, userId, {
+            enableQr: options?.enableQr ?? true,
+            skipContactSync: false,
+        });
+    }
+
+    /** Headless startup / recovery: no QR spam, no contact import. */
+    setupRestoredSessionHandlers(
+        client: Client,
+        clientId: string,
+        userId: string,
+    ): void {
+        this.setupSessionHandlers(client, clientId, () => undefined, userId, {
+            enableQr: false,
+            skipContactSync: true,
+        });
+    }
+
+    private setupSessionHandlers(
+        client: Client,
+        clientId: string,
+        emit: (event: string, data: any) => void,
+        userId: string,
+        options: { enableQr: boolean; skipContactSync: boolean },
     ): void {
         this.logger.log(`🔧 Setting up enhanced event handlers for client: ${clientId}`);
 
@@ -61,10 +87,12 @@ export class EventHandlerService {
         // ✅ Mark session start time for message filtering
         this.messageHandler.markSessionStart(clientId);
 
-        this.setupQRHandler(client, clientId, emit);
+        if (options.enableQr) {
+            this.setupQRHandler(client, clientId, emit);
+        }
         this.setupMessageHandler(client, clientId, sessionState);
         this.setupAuthHandlers(client, clientId, emit, sessionState);
-        this.setupConnectionHandlers(client, clientId, emit, userId, sessionState);
+        this.setupConnectionHandlers(client, clientId, emit, userId, sessionState, options.skipContactSync);
         this.setupErrorHandlers(client, clientId, emit, sessionState);
 
         this.logger.log(`✅ Enhanced event handlers setup completed for ${clientId} at ${new Date(sessionState.startTime).toISOString()}`);
@@ -170,14 +198,15 @@ export class EventHandlerService {
         clientId: string,
         emit: (event: string, data: any) => void,
         userId: string,
-        sessionState: SessionState
+        sessionState: SessionState,
+        skipContactSync: boolean = false,
     ): void {
         client.on('ready', async () => {
             if (sessionState.isHandlingLogout || sessionState.isCleaningUp) return;
 
             try {
                 this.logger.log(`🎉 Client ${clientId} is ready! Session started at ${new Date(sessionState.startTime).toISOString()}`);
-                await this.handleClientReady(client, clientId, emit, userId, sessionState);
+                await this.handleClientReady(client, clientId, emit, userId, sessionState, skipContactSync);
             } catch (error) {
                 this.logger.error(`❌ Ready handler error for ${clientId}: ${error.message}`);
                 emit('initialization_failed', { clientId, error: error.message });
@@ -215,7 +244,8 @@ export class EventHandlerService {
         clientId: string,
         emit: (event: string, data: any) => void,
         userId: string,
-        sessionState: SessionState
+        sessionState: SessionState,
+        skipContactSync: boolean = false,
     ): Promise<void> {
         // ✅ Stop loading when client is ready
         emit('loading_status', { clientId, loading: false });
@@ -236,10 +266,12 @@ export class EventHandlerService {
 
         await this.sessionManager.saveSessionState(clientId);
         const isRestored = this.sessionManager.isRestoredSession(clientId);
-        await new Promise(resolve => setTimeout(resolve, 5000));
 
-        try {
-            const allContacts = await client.getContacts();
+        if (!skipContactSync && !isRestored) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            try {
+                const allContacts = await client.getContacts();
 
             const savedContacts = allContacts.filter((contact: Contact) => {
                 if (!contact.id || !contact.id._serialized || !contact.id.user) return false;
@@ -302,6 +334,7 @@ export class EventHandlerService {
             }
         } catch (err) {
             this.logger.warn(`⚠️ Skipped loading/saving contacts for ${clientId}: ${err?.message ?? err}`);
+        }
         }
 
         emit('ready', {

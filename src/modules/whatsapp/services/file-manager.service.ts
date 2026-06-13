@@ -243,8 +243,13 @@ export class FileManagerService {
             const stats = fs.statSync(sessionPath);
             if (!stats.isDirectory()) return false;
 
-            const files = fs.readdirSync(sessionPath);
-            return files.length > 0;
+            const defaultPath = path.join(sessionPath, 'Default');
+            if (fs.existsSync(defaultPath) && fs.statSync(defaultPath).isDirectory()) {
+                return true;
+            }
+
+            const legacyAuthPath = path.join(sessionPath, '.wwebjs_auth');
+            return fs.existsSync(legacyAuthPath);
         } catch (error) {
             return false;
         }

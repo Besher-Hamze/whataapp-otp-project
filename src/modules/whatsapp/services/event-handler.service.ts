@@ -327,13 +327,12 @@ export class EventHandlerService {
         emit: (event: string, data: any) => void,
         sessionState: SessionState
     ): Promise<void> {
-        // ✅ Update session state immediately
         this.sessionManager.updateClientState(clientId, { isReady: false });
-        await this.sessionManager.markSessionAsDisconnected(clientId);
 
         const isLogout = this.isLogoutReason(reason);
 
         if (isLogout) {
+            await this.sessionManager.markSessionAsDisconnected(clientId);
             // ✅ Set logout state
             sessionState.isHandlingLogout = true;
             sessionState.isCleaningUp = true;
@@ -371,6 +370,7 @@ export class EventHandlerService {
                 await this.reconnectionService.handleReconnection(clientId);
             } else {
                 this.logger.warn(`❌ No account found for ${clientId}, cannot reconnect`);
+                await this.sessionManager.markSessionAsDisconnected(clientId);
             }
         }
     }

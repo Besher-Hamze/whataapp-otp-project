@@ -1,6 +1,7 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { Client } from 'whatsapp-web.js';
 import { Account, AccountDocument } from '../../accounts/schema/account.schema';
 import { SessionManagerService } from './session-manager.service';
 import { EventHandlerService } from './event-handler.service';
@@ -86,6 +87,20 @@ export class SessionRecoveryService {
                 `initialize-${clientId}`,
             );
 
+            const connected = await this.waitUntilConnected(client, clientId);
+            if (!connected) {
+                this.logger.error(`❌ Full session rebuild for ${clientId}: initialize finished but not CONNECTED`);
+                this.sessionManager.removeSession(clientId, { preserveSocketMappings: true });
+                return false;
+            }
+
+            this.sessionManager.updateClientState(clientId, {
+                isReady: true,
+                reconnectAttempts: 0,
+                lastActivity: Date.now(),
+            });
+            await this.sessionManager.saveSessionState(clientId);
+
             this.logger.log(`✅ Full session rebuild finished for ${clientId}`);
             return true;
         } catch (error: any) {
@@ -93,6 +108,28 @@ export class SessionRecoveryService {
             this.sessionManager.removeSession(clientId, { preserveSocketMappings: true });
             return false;
         }
+    }
+
+    private async waitUntilConnected(client: Client, clientId: string): Promise<boolean> {
+        const pollMs = 2000;
+        const maxAttempts = 30;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const ws = await this.withTimeout(
+                    client.getState(),
+                    12_000,
+                    `getState-${clientId}`,
+                );
+                if (ws === 'CONNECTED') {
+                    return true;
+                }
+            } catch (e: any) {
+                this.logger.debug(`Rebuild state check ${attempt}/${maxAttempts} for ${clientId}: ${e?.message}`);
+            }
+            await new Promise(r => setTimeout(r, pollMs));
+        }
+        return false;
     }
 
     private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

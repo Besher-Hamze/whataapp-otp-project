@@ -75,11 +75,11 @@ export class WhatsAppService implements OnModuleInit {
 
         if (ws !== 'CONNECTED') {
           this.logger.warn(`Session health: ${clientId} in state "${ws}", starting recovery`);
-          void this.reconnectionService.handleReconnection(clientId);
+          await this.reconnectionService.handleReconnection(clientId);
         }
       } catch (e: any) {
         this.logger.warn(`Session health: ${clientId} check failed (${e?.message}), starting recovery`);
-        void this.reconnectionService.handleReconnection(clientId);
+        await this.reconnectionService.handleReconnection(clientId);
       }
     }
   }

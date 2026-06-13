@@ -10,7 +10,7 @@ export class ReconnectionService {
     private readonly INIT_TIMEOUT_MS = 90_000;
     private readonly STATE_CHECK_TIMEOUT_MS = 12_000;
 
-    private readonly reconnectInFlight = new Map<string, Promise<void>>();
+    private readonly reconnectInFlight = new Map<string, Promise<boolean>>();
 
     constructor(
         private readonly sessionManager: SessionManagerService,
@@ -18,7 +18,7 @@ export class ReconnectionService {
         private readonly sessionRecovery: SessionRecoveryService,
     ) { }
 
-    async handleReconnection(clientId: string): Promise<void> {
+    async handleReconnection(clientId: string): Promise<boolean> {
         const existing = this.reconnectInFlight.get(clientId);
         if (existing) {
             return existing;
@@ -31,11 +31,15 @@ export class ReconnectionService {
         return job;
     }
 
-    private async runReconnection(clientId: string): Promise<void> {
+    private async runReconnection(clientId: string): Promise<boolean> {
         const clientState = this.sessionManager.getClientState(clientId);
         if (!clientState) {
-            this.logger.warn(`Cannot reconnect ${clientId}: client state not found`);
-            return;
+            this.logger.warn(`No in-memory client for ${clientId}, attempting full rebuild from auth`);
+            const rebuilt = await this.sessionRecovery.recreateClientFromAuth(clientId);
+            if (!rebuilt) {
+                await this.sessionManager.markSessionAsDisconnected(clientId);
+            }
+            return rebuilt;
         }
 
         this.sessionManager.updateClientState(clientId, {
@@ -71,8 +75,9 @@ export class ReconnectionService {
                         reconnectAttempts: 0,
                         lastActivity: Date.now(),
                     });
+                    await this.sessionManager.saveSessionState(clientId);
                     this.logger.log(`✅ Soft reconnect succeeded for ${clientId}`);
-                    return;
+                    return true;
                 }
 
                 this.logger.warn(`Soft reconnect ${clientId}: unexpected WhatsApp state "${ws}"`);
@@ -91,7 +96,9 @@ export class ReconnectionService {
         const rebuilt = await this.sessionRecovery.recreateClientFromAuth(clientId);
         if (!rebuilt) {
             this.logger.error(`⛔ Full rebuild failed for ${clientId}`);
+            await this.sessionManager.markSessionAsDisconnected(clientId);
         }
+        return rebuilt;
     }
 
     private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

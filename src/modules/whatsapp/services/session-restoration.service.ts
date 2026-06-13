@@ -27,42 +27,42 @@ export class SessionRestorationService {
             const sessionFolders = this.fileManager.loadSessionFolders();
             this.logger.log(`📁 Found ${sessionFolders.length} session folders`);
 
-            // Get accounts that should have active sessions
-            const activeAccounts = await this.accountModel.find({
-                status: { $in: ['active', 'ready'] },
-                clientId: { $exists: true, $ne: null },
-                'sessionData.sessionValid': true
+            const clientIds = sessionFolders.map(folder => folder.replace('session-', ''));
+            const accounts = await this.accountModel.find({
+                clientId: { $in: clientIds },
             }).lean();
 
-            const accountMap = new Map(activeAccounts.map(acc => [acc.clientId, acc]));
-            this.logger.log(`📋 Found ${activeAccounts.length} accounts with valid sessions to restore`);
+            const accountMap = new Map(accounts.map(acc => [acc.clientId, acc]));
+            this.logger.log(`📋 Found ${accounts.length} accounts matching session folders (including disconnected)`);
 
             for (const folder of sessionFolders) {
                 const clientId = folder.replace('session-', '');
                 const sessionPath = path.join(process.cwd(), '.wwebjs_auth', folder);
 
-                // Validate session files
                 if (!this.fileManager.isValidSession(sessionPath)) {
-                    this.logger.warn(`❌ Invalid session files for ${clientId}, cleaning up...`);
-                    await this.fileManager.cleanupSessionFiles(clientId);
+                    this.logger.warn(`❌ Invalid session files for ${clientId}, cleaning up orphan session...`);
+                    if (!accountMap.has(clientId)) {
+                        await this.fileManager.cleanupSessionFiles(clientId);
+                    }
                     continue;
                 }
 
-                // Check if account exists and is active
                 const account = accountMap.get(clientId);
                 if (!account) {
-                    this.logger.warn(`❌ No active account found for session ${clientId}, cleaning up...`);
+                    this.logger.warn(`❌ No account document for session ${clientId}, cleaning up orphan session...`);
                     await this.fileManager.cleanupSessionFiles(clientId);
                     continue;
                 }
 
-                // Check if session is already restored
                 if (this.sessionManager.isClientReady(clientId)) {
                     this.logger.log(`✅ Session ${clientId} already active, skipping...`);
                     continue;
                 }
 
-                // Restore the session with full message handling
+                if (account.status === 'disconnected') {
+                    this.logger.log(`🔄 Attempting restore for previously disconnected account ${clientId}`);
+                }
+
                 await this.restoreSessionSilently(clientId, account.user.toString());
             }
 
@@ -98,15 +98,8 @@ export class SessionRestorationService {
         } catch (error) {
             this.logger.error(`❌ Failed to restore session ${clientId}: ${error.message}`);
 
-            try {
-                await this.fileManager.cleanupSessionFiles(clientId, false);
-            } catch (cleanupError) {
-                this.logger.warn(`Warning: Could not cleanup files for failed restore ${clientId}: ${cleanupError.message}`);
-            }
-
             this.sessionManager.removeSession(clientId);
 
-            // Mark account as disconnected
             await this.accountModel.updateOne(
                 { clientId },
                 {
@@ -114,9 +107,9 @@ export class SessionRestorationService {
                         status: 'disconnected',
                         'sessionData.isAuthenticated': false,
                         'sessionData.sessionValid': false,
-                        'sessionData.authState': 'failed'
-                    }
-                }
+                        'sessionData.authState': 'failed',
+                    },
+                },
             );
         }
     }
@@ -291,12 +284,6 @@ export class SessionRestorationService {
             return true;
         } catch (error) {
             this.logger.error(`❌ Failed to restore specific session ${clientId}: ${error.message}`);
-
-            try {
-                await this.fileManager.cleanupSessionFiles(clientId, false);
-            } catch (cleanupError) {
-                this.logger.warn(`Warning: Could not cleanup files for failed specific restore ${clientId}: ${cleanupError.message}`);
-            }
 
             this.sessionManager.removeSession(clientId);
             return false;

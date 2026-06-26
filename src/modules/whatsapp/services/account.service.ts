@@ -149,4 +149,29 @@ async deleteAccountOnLogout(accountId: string): Promise<void> {
     async findAccountByClientId(clientId: string): Promise<AccountDocument | null> {
         return await this.accountModel.findOne({ clientId }).exec();
     }
+
+    async findAccountForUser(accountId: string, userId: string): Promise<AccountDocument | null> {
+        return this.accountModel.findOne({ _id: accountId, user: userId }).exec();
+    }
+
+    async markAccountAwaitingQr(accountId: string): Promise<void> {
+        await this.accountModel.updateOne(
+            { _id: accountId },
+            {
+                $set: {
+                    status: 'authenticating',
+                    'sessionData.authState': 'pending',
+                    'sessionData.sessionValid': false,
+                    'sessionData.isAuthenticated': false,
+                },
+            },
+        );
+    }
+
+    async ensureClientId(accountId: string, userId: string, clientId: string): Promise<void> {
+        await this.accountModel.updateOne(
+            { _id: accountId, user: userId },
+            { $set: { clientId } },
+        );
+    }
 }

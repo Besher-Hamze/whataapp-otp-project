@@ -2,7 +2,7 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { SessionManagerService } from './session-manager.service';
 import { RecipientResolverService } from './recipient-resolver.service';
 import { MessageContentResolverService } from './message-content-resolver.service';
-import { MessageMedia } from 'whatsapp-web.js';
+import { MessageMedia, Client, Message } from 'whatsapp-web.js';
 import { ClientState } from '../interfaces/client-state.interface';
 import * as mime from 'mime-types';
 import { InjectModel } from '@nestjs/mongoose';
@@ -29,6 +29,14 @@ interface SendProgress {
 @Injectable()
 export class MessageSenderService {
   private readonly logger = new Logger(MessageSenderService.name);
+
+  /** WhatsApp ACK: 1 = server, 2 = device, 3 = read */
+  private readonly ACK_DELIVERED_MIN = 1;
+  private readonly ACK_ERROR = -1;
+  private readonly DELIVERY_ACK_TIMEOUT_MS =
+    Number(process.env.WHATSAPP_DELIVERY_ACK_TIMEOUT_MS) || 45_000;
+  private readonly GET_STATE_TIMEOUT_MS =
+    Number(process.env.WHATSAPP_GETSTATE_TIMEOUT_MS) || 12_000;
 
   // Narrow patterns: message often delivered but library failed to return a serialized Message
   private readonly KNOWN_SUCCESS_ERRORS = [
@@ -248,36 +256,122 @@ export class MessageSenderService {
     }
   }
 
-  private async validateClientConnection(clientState: any, clientId: string): Promise<void> {
+  private async validateClientConnection(clientState: ClientState, clientId: string): Promise<void> {
     if (!clientState.isReady) {
       throw new HttpException('WhatsApp client is not ready. Please wait for initialization.', HttpStatus.SERVICE_UNAVAILABLE);
     }
 
-    const stateTimeoutMs = Number(process.env.WHATSAPP_GETSTATE_TIMEOUT_MS) || 12_000;
+    await this.assertWhatsAppConnected(clientState.client, clientId, true);
+  }
 
+  /** Lightweight CONNECTED check before each outbound message. */
+  private async assertWhatsAppConnected(
+    client: Client,
+    clientId: string,
+    triggerRecovery: boolean,
+  ): Promise<void> {
     try {
       const state = await Promise.race([
-        clientState.client.getState(),
+        client.getState(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('getState timeout')), stateTimeoutMs),
+          setTimeout(() => reject(new Error('getState timeout')), this.GET_STATE_TIMEOUT_MS),
         ),
       ]);
       this.logger.debug(`🔍 Client ${clientId} state: ${state}`);
 
       if (state !== 'CONNECTED') {
-        this.markSessionUnhealthy(clientId, `Pre-send state is ${state}`);
+        if (triggerRecovery) {
+          this.markSessionUnhealthy(clientId, `Pre-send state is ${state}`);
+        }
         throw new HttpException(
           `WhatsApp client is ${state}. Session recovery started — retry shortly.`,
           HttpStatus.SERVICE_UNAVAILABLE,
         );
       }
     } catch (error: any) {
-      this.markSessionUnhealthy(clientId, `State check failed: ${error?.message || error}`);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      if (triggerRecovery) {
+        this.markSessionUnhealthy(clientId, `State check failed: ${error?.message || error}`);
+      }
       throw new HttpException(
         'WhatsApp session is unhealthy and recovery has started. Please retry in a few seconds.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
+  }
+
+  /**
+   * sendMessage() can resolve with an id while the Puppeteer session is stale.
+   * Wait until WhatsApp reports server/device ACK before counting as delivered.
+   */
+  private waitForDeliveryAck(client: Client, message: Message, timeoutMs: number): Promise<boolean> {
+    const messageId = message?.id?.id;
+    if (!messageId) {
+      return Promise.resolve(false);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+
+      const finish = (delivered: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        client.off('message_ack', onAck);
+        resolve(delivered);
+      };
+
+      const readAck = (): number | undefined => {
+        const ack = (message as any).ack;
+        return typeof ack === 'number' ? ack : undefined;
+      };
+
+      const onAck = (msg: Message, ack: number) => {
+        if (msg?.id?.id !== messageId) return;
+        if (ack >= this.ACK_DELIVERED_MIN) {
+          finish(true);
+        } else if (ack === this.ACK_ERROR) {
+          finish(false);
+        }
+      };
+
+      const initialAck = readAck();
+      if (initialAck !== undefined) {
+        if (initialAck >= this.ACK_DELIVERED_MIN) {
+          finish(true);
+          return;
+        }
+        if (initialAck === this.ACK_ERROR) {
+          finish(false);
+          return;
+        }
+      }
+
+      client.on('message_ack', onAck);
+
+      const poll = setInterval(() => {
+        const ack = readAck();
+        if (ack !== undefined && ack >= this.ACK_DELIVERED_MIN) {
+          clearInterval(poll);
+          finish(true);
+        } else if (ack === this.ACK_ERROR) {
+          clearInterval(poll);
+          finish(false);
+        }
+      }, 500);
+
+      const timer = setTimeout(() => {
+        clearInterval(poll);
+        const ack = readAck();
+        finish(ack !== undefined && ack >= this.ACK_DELIVERED_MIN);
+      }, timeoutMs);
+    });
+  }
+
+  private async incrementMessageUsage(userId: string): Promise<void> {
+    await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
   }
 
   private async sendToRecipients(
@@ -300,6 +394,10 @@ export class MessageSenderService {
       this.logger.debug(`📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
+        const clientId = this.extractClientId(clientState);
+        if (clientId) {
+          await this.assertWhatsAppConnected(clientState.client, clientId, true);
+        }
         return await this.sendSingleMessage(clientState, recipient, content, userId);
       });
 
@@ -341,59 +439,62 @@ export class MessageSenderService {
   }
 
   private async sendSingleFileMessage(
-    clientState: any,
+    clientState: ClientState,
     recipient: string,
     media: MessageMedia,
     caption: string,
     mimeType: string,
     userId: string
   ): Promise<MessageResult> {
+    const clientId = this.extractClientId(clientState);
+
     try {
+      if (clientId) {
+        await this.assertWhatsAppConnected(clientState.client, clientId, true);
+      }
+
       const cleanedRecipient = recipient.replace(/\D/g, '');
       const chatId = `${cleanedRecipient}@c.us`;
 
-      let sendResult;
+      let messageResult: Message;
       if (mimeType.startsWith('image/')) {
-        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'photo' });
+        messageResult = await clientState.client.sendMessage(chatId, media, { caption, sendSeen: false } as any);
         this.logger.log(`📸 Sent photo to ${recipient}: ${media.filename}`);
       } else if (mimeType.startsWith('video/')) {
-        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'video' });
+        messageResult = await clientState.client.sendMessage(chatId, media, { caption, sendSeen: false } as any);
         this.logger.log(`🎥 Sent video to ${recipient}: ${media.filename}`);
       } else {
-        sendResult = await clientState.client.sendMessage(chatId, media, { caption, mediaType: 'document' });
+        messageResult = await clientState.client.sendMessage(chatId, media, { caption, sendSeen: false } as any);
         this.logger.log(`📄 Sent document to ${recipient}: ${media.filename}`);
       }
 
-      // Increment message count for successful send
-      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
+      const delivered = await this.waitForDeliveryAck(
+        clientState.client,
+        messageResult,
+        this.DELIVERY_ACK_TIMEOUT_MS,
+      );
 
-      return { recipient, status: 'sent' };
-    } catch (error: any) {
-      const clientId = this.extractClientId(clientState);
-      const msg = error?.message || '';
-
-      if (clientId && this.isStaleSessionError(msg)) {
-        this.markSessionUnhealthy(clientId, `File send: ${msg}`);
+      if (!delivered) {
+        if (clientId) {
+          this.markSessionUnhealthy(clientId, `No delivery ACK for file to ${recipient}`);
+        }
         return {
           recipient,
           status: 'failed',
-          error: 'Session became unhealthy and is recovering. Retry this send.',
+          error: 'Message was not confirmed by WhatsApp. Session recovery started — please retry.',
+          messageId: messageResult?.id?.id,
         };
       }
 
-      const knownSerializeError =
-        msg.includes('getMessageModel') ||
-        msg.includes('msg.serialize is not a function') ||
-        msg.includes("Cannot read property 'serialize'");
+      await this.incrementMessageUsage(userId);
 
-      if (knownSerializeError) {
-        this.logger.warn(`⚠️ File likely sent, but confirmation failed for ${recipient}: ${msg}`);
-        await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
-        return { recipient, status: 'likely_sent', warning: 'Sent but confirmation failed' };
-      }
-
-      this.logger.error(`❌ Failed to send file to ${recipient}: ${msg}`);
-      return { recipient, status: 'failed', error: msg || 'Unknown error' };
+      return {
+        recipient,
+        status: 'sent',
+        messageId: messageResult?.id?.id,
+      };
+    } catch (error: any) {
+      return await this.handleSendError(recipient, error, clientId, userId);
     }
   }
 
@@ -430,6 +531,10 @@ export class MessageSenderService {
       this.logger.debug(`📦 Processing file batch ${currentBatch}/${totalBatches} (${batch.length} recipients)`);
 
       const batchPromises = batch.map(async (recipient) => {
+        const clientId = this.extractClientId(clientState);
+        if (clientId) {
+          await this.assertWhatsAppConnected(clientState.client, clientId, true);
+        }
         const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${caption}  `;
         return await this.sendSingleFileMessage(clientState, recipient, media, UniqContent, mimeType, userId);
       });
@@ -477,7 +582,13 @@ export class MessageSenderService {
     content: string,
     userId: string
   ): Promise<MessageResult> {
+    const clientId = this.extractClientId(clientState);
+
     try {
+      if (clientId) {
+        await this.assertWhatsAppConnected(clientState.client, clientId, true);
+      }
+
       const cleanedRecipient = recipient.replace(/\D/g, '');
       const chatId = `${cleanedRecipient}@c.us`;
 
@@ -485,28 +596,54 @@ export class MessageSenderService {
       const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${content}  `;
       const messageResult = await clientState.client.sendMessage(chatId, UniqContent, { sendSeen: false });
 
-      // Increment message count for successful send
-      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
+      const delivered = await this.waitForDeliveryAck(
+        clientState.client,
+        messageResult,
+        this.DELIVERY_ACK_TIMEOUT_MS,
+      );
+
+      if (!delivered) {
+        if (clientId) {
+          this.markSessionUnhealthy(clientId, `No delivery ACK for message to ${recipient}`);
+        }
+        this.logger.warn(
+          `⚠️ sendMessage returned id ${messageResult?.id?.id} for ${recipient} but WhatsApp did not ACK delivery`,
+        );
+        return {
+          recipient,
+          status: 'failed',
+          error: 'Message was not confirmed by WhatsApp. Session recovery started — please retry.',
+          messageId: messageResult?.id?.id,
+        };
+      }
+
+      await this.incrementMessageUsage(userId);
 
       return {
         recipient,
         status: 'sent',
-        messageId: messageResult?.id?.id || 'unknown'
+        messageId: messageResult?.id?.id || 'unknown',
       };
 
     } catch (error: any) {
-      return await this.handleSendError(recipient, error, this.extractClientId(clientState));
+      return await this.handleSendError(recipient, error, clientId, userId);
     }
   }
 
   private async sendSinglePhotoMessage(
-    clientState: any,
+    clientState: ClientState,
     recipient: string,
     media: MessageMedia,
     caption: string,
     userId: string
   ): Promise<MessageResult> {
+    const clientId = this.extractClientId(clientState);
+
     try {
+      if (clientId) {
+        await this.assertWhatsAppConnected(clientState.client, clientId, true);
+      }
+
       const cleanedRecipient = recipient.replace(/\D/g, '');
       const chatId = `${cleanedRecipient}@c.us`;
 
@@ -514,17 +651,34 @@ export class MessageSenderService {
       const UniqContent = `عزيزي صاحب الرقم ${recipient}:\n ${caption}  `;
       const messageResult = await clientState.client.sendMessage(chatId, media, { caption: UniqContent, sendSeen: false });
 
-      // Increment message count for successful send
-      await this.userModel.findByIdAndUpdate(userId, { $inc: { 'subscription.messagesUsed': 1 } });
+      const delivered = await this.waitForDeliveryAck(
+        clientState.client,
+        messageResult,
+        this.DELIVERY_ACK_TIMEOUT_MS,
+      );
+
+      if (!delivered) {
+        if (clientId) {
+          this.markSessionUnhealthy(clientId, `No delivery ACK for photo to ${recipient}`);
+        }
+        return {
+          recipient,
+          status: 'failed',
+          error: 'Message was not confirmed by WhatsApp. Session recovery started — please retry.',
+          messageId: messageResult?.id?.id,
+        };
+      }
+
+      await this.incrementMessageUsage(userId);
 
       return {
         recipient,
         status: 'sent',
-        messageId: messageResult?.id?.id || 'unknown'
+        messageId: messageResult?.id?.id || 'unknown',
       };
 
     } catch (error: any) {
-      return await this.handleSendError(recipient, error, this.extractClientId(clientState));
+      return await this.handleSendError(recipient, error, clientId, userId);
     }
   }
 
@@ -532,6 +686,7 @@ export class MessageSenderService {
     recipient: string,
     error: any,
     clientId?: string,
+    userId?: string,
   ): Promise<MessageResult> {
     const errorMessage = error?.message || 'Unknown error';
 
@@ -549,11 +704,14 @@ export class MessageSenderService {
     );
 
     if (isKnownSuccessError) {
-      this.logger.warn(`⚠️ Message likely sent to ${recipient}, but confirmation failed: ${errorMessage}`);
+      this.logger.warn(`⚠️ Serialize error for ${recipient} — cannot confirm delivery: ${errorMessage}`);
+      if (userId) {
+        await this.incrementMessageUsage(userId);
+      }
       return {
         recipient,
         status: 'likely_sent',
-        warning: 'Message likely sent but confirmation failed due to WhatsApp Web JS limitation'
+        warning: 'WhatsApp accepted the send but delivery could not be confirmed. Verify on the device.',
       };
     }
 

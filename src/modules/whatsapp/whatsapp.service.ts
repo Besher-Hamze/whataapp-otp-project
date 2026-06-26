@@ -286,6 +286,101 @@ export class WhatsAppService implements OnModuleInit {
     return await this.sessionRestoration.restoreSpecificSession(clientId, userId, emit);
   }
 
+  /**
+   * Re-link an existing account (same Mongo document + clientId) by showing a new QR code.
+   * Does not delete the account, API key, contacts, or templates.
+   */
+  async reconnectAccountWithQr(
+    socketClientId: string,
+    userId: string,
+    mongoAccountId: string,
+    emit: (event: string, data: any) => void,
+  ): Promise<{ clientId: string; alreadyReady: boolean }> {
+    const account = await this.accountService.findAccountForUser(mongoAccountId, userId);
+    if (!account) {
+      throw new HttpException('Account not found or does not belong to user', HttpStatus.NOT_FOUND);
+    }
+
+    let clientId = account.clientId;
+    if (!clientId) {
+      clientId = uuidv4();
+      await this.accountService.ensureClientId(mongoAccountId, userId, clientId);
+    }
+
+    if (this.sessionManager.isClientReady(clientId)) {
+      emit('ready', {
+        clientId,
+        status: 'active',
+        message: 'WhatsApp session is already connected.',
+      });
+      return { clientId, alreadyReady: true };
+    }
+
+    const prior = this.sessionManager.getClientState(clientId);
+    if (prior?.client) {
+      try {
+        prior.client.removeAllListeners();
+        await prior.client.destroy();
+      } catch (e: any) {
+        this.logger.warn(`Teardown before QR reconnect for ${clientId}: ${e?.message}`);
+      }
+    }
+    this.sessionManager.removeSession(clientId, { preserveSocketMappings: false });
+
+    await this.accountService.markAccountAwaitingQr(mongoAccountId);
+    this.sessionManager.mapSocketToClient(socketClientId, clientId);
+
+    const queueKey = `reconnect-${clientId}`;
+    if (this.initializationQueue.has(queueKey)) {
+      return this.initializationQueue.get(queueKey)!;
+    }
+
+    const job = this.runQrReconnect(socketClientId, clientId, userId, emit).finally(() => {
+      this.initializationQueue.delete(queueKey);
+    });
+    this.initializationQueue.set(queueKey, job);
+    return job;
+  }
+
+  private async runQrReconnect(
+    socketClientId: string,
+    clientId: string,
+    userId: string,
+    emit: (event: string, data: any) => void,
+  ): Promise<{ clientId: string; alreadyReady: boolean }> {
+    const startTime = Date.now();
+
+    try {
+      emit('session_starting', { clientId, socketId: socketClientId, timestamp: Date.now() });
+
+      const client = await this.sessionManager.createSession(clientId, userId, false);
+      this.eventHandler.setupEventHandlers(client, clientId, emit, userId, { enableQr: true });
+
+      const initTimeout = setTimeout(() => {
+        this.logger.error(`⏰ QR reconnect timeout for ${clientId}`);
+        emit('initialization_failed', { clientId, error: 'Initialization timed out' });
+      }, 120_000);
+
+      await client.initialize();
+      clearTimeout(initTimeout);
+
+      this.logger.log(`✅ QR reconnect initialize finished for ${clientId} in ${Date.now() - startTime}ms`);
+      return { clientId, alreadyReady: this.sessionManager.isClientReady(clientId) };
+    } catch (error: any) {
+      this.logger.error(`❌ QR reconnect failed for ${clientId}: ${error?.message}`);
+      this.sessionManager.removeSession(clientId);
+      emit('initialization_failed', {
+        clientId,
+        error: error?.message || 'Reconnect failed',
+        duration: Date.now() - startTime,
+      });
+      throw new HttpException(
+        error?.message || 'Failed to start QR reconnect',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   getRestoredSessions(): string[] {
     return Array.from(this.sessionManager.getAllSessions().entries())
       .filter(([clientId]) => this.sessionManager.isRestoredSession(clientId))

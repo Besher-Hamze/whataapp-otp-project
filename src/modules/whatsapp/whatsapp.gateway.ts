@@ -127,6 +127,51 @@ export class WhatsAppGateway
     }
   }
 
+  @SubscribeMessage('reconnect_account')
+  async handleReconnectAccount(
+    client: AuthenticatedSocket,
+    data?: { accountId?: string; token?: string },
+  ) {
+    const startTime = Date.now();
+    this.logger.log(`🔄 QR reconnect requested for socket ${client.id}`);
+
+    try {
+      let userId = client.userId;
+      if (!userId && data?.token) {
+        userId = await this.validateToken(data.token);
+        this.setSocketAuthentication(client, userId);
+      }
+      if (!userId) {
+        throw new UnauthorizedException('Authentication required');
+      }
+
+      const accountId = data?.accountId;
+      if (!accountId || !mongoose.isValidObjectId(accountId)) {
+        throw new BadRequestException('Valid accountId is required');
+      }
+
+      const result = await this.whatsappService.reconnectAccountWithQr(
+        client.id,
+        userId,
+        accountId,
+        (event, payload) => this.emitToSocket(client.id, event, payload),
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`✅ QR reconnect flow started in ${duration}ms for account ${accountId}`);
+      return { success: true, ...result, duration, timestamp: Date.now() };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`❌ QR reconnect failed in ${duration}ms: ${error.message}`);
+      client.emit('initialization_failed', {
+        message: 'Failed to start QR reconnect',
+        details: error.message,
+        duration,
+      });
+      throw new BadRequestException(error.message);
+    }
+  }
+
   @SubscribeMessage('get_session_status')
   async handleGetSessionStatus(client: AuthenticatedSocket) {
     try {

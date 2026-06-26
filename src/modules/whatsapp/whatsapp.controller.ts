@@ -150,6 +150,13 @@ export class WhatsAppController {
         throw new BadRequestException('Account not found or does not belong to user');
       }
 
+      if (!this.whatsappService.isClientReady(client.clientId)) {
+        throw new HttpException(
+          'WhatsApp is not connected for this account. Open the dashboard and reconnect, then retry.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+
       // Validate delay parameter
       let messageDelay = 5000; // Default 5 seconds
       if (delay !== undefined) {
@@ -162,14 +169,6 @@ export class WhatsAppController {
         }
         messageDelay = parsedDelay;
       }
-
-      // Check if client is ready
-      // if (!this.whatsappService.isClientReady(client.clientId)) {
-      //   throw new HttpException(
-      //     'WhatsApp client is not ready. Please ensure the session is connected.',
-      //     HttpStatus.SERVICE_UNAVAILABLE
-      //   );
-      // }
 
       this.logger.log(`📤 Sending bulk messages via client ${client.clientId} with ${messageDelay}ms delay`);
 
@@ -256,6 +255,13 @@ export class WhatsAppController {
       const client = await this.accountsService.findClientIdByAccountId(accountId, userId);
       if (!client) {
         throw new BadRequestException('Account not found or does not belong to user');
+      }
+
+      if (!this.whatsappService.isClientReady(client.clientId)) {
+        throw new HttpException(
+          'WhatsApp is not connected for this account. Open the dashboard and reconnect, then retry.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
       }
 
       // Validate delay parameter

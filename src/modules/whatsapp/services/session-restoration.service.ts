@@ -218,8 +218,21 @@ export class SessionRestorationService {
             this.logger.log(`🔄 Restoring specific session ${clientId} with events...`);
 
             if (this.sessionManager.getClientState(clientId)) {
-                this.logger.log(`Session ${clientId} already exists in memory`);
-                return this.sessionManager.isClientReady(clientId);
+                const ready = this.sessionManager.isClientReady(clientId);
+                if (ready) {
+                    this.logger.log(`Session ${clientId} already active`);
+                    return true;
+                }
+                const state = this.sessionManager.getClientState(clientId);
+                if (state?.client) {
+                    try {
+                        state.client.removeAllListeners();
+                        await state.client.destroy();
+                    } catch (e: any) {
+                        this.logger.debug(`Teardown before restore ${clientId}: ${e?.message}`);
+                    }
+                }
+                this.sessionManager.removeSession(clientId);
             }
 
             const client = await this.sessionManager.createSession(clientId, userId, true);

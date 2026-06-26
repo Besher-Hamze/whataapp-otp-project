@@ -15,6 +15,11 @@ import { ContactsService } from '../contacts/contacts.service';
 export class WhatsAppService implements OnModuleInit {
   private readonly logger = new Logger(WhatsAppService.name);
   private readonly initializationQueue = new Map<string, Promise<any>>();
+  /** Latest socket emit for in-flight QR reconnect (survives modal close / new socket). */
+  private readonly reconnectEmitters = new Map<
+    string,
+    { socketClientId: string; emit: (event: string, data: any) => void }
+  >();
 
   constructor(
     private readonly sessionManager: SessionManagerService,
@@ -328,9 +333,11 @@ export class WhatsAppService implements OnModuleInit {
     }
 
     this.sessionManager.mapSocketToClient(socketClientId, clientId);
+    this.reconnectEmitters.set(clientId, { socketClientId, emit });
 
     const queueKey = `reconnect-${clientId}`;
     if (this.initializationQueue.has(queueKey)) {
+      this.logger.log(`🔄 QR reconnect already in progress for ${clientId}, routing events to new socket`);
       return this.initializationQueue.get(queueKey)!;
     }
 
@@ -342,6 +349,7 @@ export class WhatsAppService implements OnModuleInit {
       emit,
     ).finally(() => {
       this.initializationQueue.delete(queueKey);
+      this.reconnectEmitters.delete(clientId);
     });
     this.initializationQueue.set(queueKey, job);
     return job;
@@ -360,11 +368,19 @@ export class WhatsAppService implements OnModuleInit {
       if (event === 'qr') {
         void this.accountService.markAccountNeedsQr(mongoAccountId);
       }
-      emit(event, data);
+      const target = this.reconnectEmitters.get(clientId);
+      (target?.emit ?? emit)(event, data);
     };
 
     try {
       wrappedEmit('session_starting', { clientId, socketId: socketClientId, timestamp: Date.now() });
+
+      if (this.sessionManager.getClientState(clientId)?.client) {
+        await this.cleanupService.releaseClientMemory(
+          clientId,
+          'Interactive reconnect: fresh client for QR',
+        );
+      }
 
       const client = await this.sessionManager.createSession(clientId, userId, false);
       this.eventHandler.setupEventHandlers(client, clientId, wrappedEmit, userId, { enableQr: true });

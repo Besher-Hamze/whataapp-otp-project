@@ -162,15 +162,13 @@ export class SessionRestorationService {
             {
                 $set: {
                     status: 'disconnected',
-                    'sessionData.isAuthenticated': false,
-                    'sessionData.sessionValid': false,
                     'sessionData.authState': 'needs_qr',
                 },
             },
         );
 
         this.logger.warn(
-            `📵 Session ${clientId} stopped (${reason}). User must open the app and scan QR to reconnect.`,
+            `📵 Session ${clientId} paused in memory (${reason}). Auth files on disk are preserved — use Scan QR to reconnect.`,
         );
     }
 

@@ -208,20 +208,16 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async disconnectClient(socketClientId: string) {
-    const clientId = this.sessionManager.getClientIdBySocket(socketClientId);
-    if (!clientId) {
-      this.logger.debug(`No client mapped to socket ${socketClientId}`);
-      return;
-    }
-
-    this.logger.log(`🔌 Disconnecting client ${clientId} due to socket ${socketClientId} disconnect`);
-    await this.cleanupService.cleanupClient(clientId, `Socket ${socketClientId} disconnected`);
+    this.logger.log(`🔌 Socket ${socketClientId} closed — WhatsApp session stays running on server`);
+    this.sessionManager.unmapSocket(socketClientId);
   }
 
   async forceCleanupClient(clientId: string): Promise<boolean> {
     try {
       this.logger.log(`🔨 Initiating force cleanup for client ${clientId}`);
-      await this.cleanupService.cleanupClient(clientId, 'Force cleanup requested', true);
+      await this.cleanupService.cleanupClient(clientId, 'Force cleanup requested', {
+        deleteAuthFiles: false,
+      });
       return true;
     } catch (error) {
       this.logger.error(`❌ Force cleanup failed for ${clientId}: ${error.message}`);
@@ -236,7 +232,7 @@ export class WhatsAppService implements OnModuleInit {
     }
 
     if (account.clientId) {
-      this.cleanupService.scheduleCleanup(account.clientId, `Account ${accountId} deleted`);
+      this.cleanupService.scheduleCleanup(account.clientId, `Account ${accountId} deleted`, 5000, true);
     }
 
     await this.accountService.deleteAccountOnLogout(accountId);
@@ -288,7 +284,8 @@ export class WhatsAppService implements OnModuleInit {
 
   /**
    * Re-link an existing account (same Mongo document + clientId) by showing a new QR code.
-   * Does not delete the account, API key, contacts, or templates.
+   * Tries soft reconnect and disk auth first; only shows QR if WhatsApp requires it.
+   * Never deletes `.wwebjs_auth` session files.
    */
   async reconnectAccountWithQr(
     socketClientId: string,
@@ -316,18 +313,20 @@ export class WhatsAppService implements OnModuleInit {
       return { clientId, alreadyReady: true };
     }
 
-    const prior = this.sessionManager.getClientState(clientId);
-    if (prior?.client) {
-      try {
-        prior.client.removeAllListeners();
-        await prior.client.destroy();
-      } catch (e: any) {
-        this.logger.warn(`Teardown before QR reconnect for ${clientId}: ${e?.message}`);
+    if (this.sessionManager.getClientState(clientId)?.client) {
+      this.logger.log(`🔄 Trying soft reconnect for ${clientId} before QR...`);
+      const reconnected = await this.reconnectionService.handleReconnection(clientId);
+      if (reconnected || this.sessionManager.isClientReady(clientId)) {
+        emit('ready', {
+          clientId,
+          status: 'active',
+          message: 'WhatsApp session reconnected from existing auth.',
+        });
+        return { clientId, alreadyReady: true };
       }
+      await this.cleanupService.releaseClientMemory(clientId, 'Reconnect: preparing interactive restore');
     }
-    this.sessionManager.removeSession(clientId, { preserveSocketMappings: false });
 
-    await this.accountService.markAccountAwaitingQr(mongoAccountId);
     this.sessionManager.mapSocketToClient(socketClientId, clientId);
 
     const queueKey = `reconnect-${clientId}`;
@@ -335,47 +334,63 @@ export class WhatsAppService implements OnModuleInit {
       return this.initializationQueue.get(queueKey)!;
     }
 
-    const job = this.runQrReconnect(socketClientId, clientId, userId, emit).finally(() => {
+    const job = this.runInteractiveReconnect(
+      socketClientId,
+      clientId,
+      userId,
+      mongoAccountId,
+      emit,
+    ).finally(() => {
       this.initializationQueue.delete(queueKey);
     });
     this.initializationQueue.set(queueKey, job);
     return job;
   }
 
-  private async runQrReconnect(
+  private async runInteractiveReconnect(
     socketClientId: string,
     clientId: string,
     userId: string,
+    mongoAccountId: string,
     emit: (event: string, data: any) => void,
   ): Promise<{ clientId: string; alreadyReady: boolean }> {
     const startTime = Date.now();
 
+    const wrappedEmit = (event: string, data: any) => {
+      if (event === 'qr') {
+        void this.accountService.markAccountNeedsQr(mongoAccountId);
+      }
+      emit(event, data);
+    };
+
     try {
-      emit('session_starting', { clientId, socketId: socketClientId, timestamp: Date.now() });
+      wrappedEmit('session_starting', { clientId, socketId: socketClientId, timestamp: Date.now() });
 
       const client = await this.sessionManager.createSession(clientId, userId, false);
-      this.eventHandler.setupEventHandlers(client, clientId, emit, userId, { enableQr: true });
+      this.eventHandler.setupEventHandlers(client, clientId, wrappedEmit, userId, { enableQr: true });
 
       const initTimeout = setTimeout(() => {
-        this.logger.error(`⏰ QR reconnect timeout for ${clientId}`);
-        emit('initialization_failed', { clientId, error: 'Initialization timed out' });
+        this.logger.error(`⏰ Interactive reconnect timeout for ${clientId}`);
+        wrappedEmit('initialization_failed', { clientId, error: 'Initialization timed out' });
       }, 120_000);
 
       await client.initialize();
       clearTimeout(initTimeout);
 
-      this.logger.log(`✅ QR reconnect initialize finished for ${clientId} in ${Date.now() - startTime}ms`);
+      this.logger.log(
+        `✅ Interactive reconnect finished for ${clientId} in ${Date.now() - startTime}ms`,
+      );
       return { clientId, alreadyReady: this.sessionManager.isClientReady(clientId) };
     } catch (error: any) {
-      this.logger.error(`❌ QR reconnect failed for ${clientId}: ${error?.message}`);
-      this.sessionManager.removeSession(clientId);
-      emit('initialization_failed', {
+      this.logger.error(`❌ Interactive reconnect failed for ${clientId}: ${error?.message}`);
+      await this.cleanupService.releaseClientMemory(clientId, 'Interactive reconnect failed');
+      wrappedEmit('initialization_failed', {
         clientId,
         error: error?.message || 'Reconnect failed',
         duration: Date.now() - startTime,
       });
       throw new HttpException(
-        error?.message || 'Failed to start QR reconnect',
+        error?.message || 'Failed to reconnect account',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }

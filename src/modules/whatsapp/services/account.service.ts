@@ -66,7 +66,10 @@ async handleAccountReady(phoneNumber: string, name: string, clientId: string, us
             await new Promise(resolve => setTimeout(resolve, 2000));
             
             // Use cleanup service for proper browser and file cleanup
-            await this.cleanupService.cleanupClient(clientId, 'Logout', true); // Force cleanup
+            await this.cleanupService.cleanupClient(clientId, 'Logout', {
+                deleteAuthFiles: true,
+                forceCacheCleanup: true,
+            });
             this.logger.log(`✅ Client ${clientId} destroyed and cleaned up`);
 
             const account = await this.accountModel.findOne({ clientId }).exec();
@@ -154,18 +157,21 @@ async deleteAccountOnLogout(accountId: string): Promise<void> {
         return this.accountModel.findOne({ _id: accountId, user: userId }).exec();
     }
 
-    async markAccountAwaitingQr(accountId: string): Promise<void> {
+    async markAccountNeedsQr(accountId: string): Promise<void> {
         await this.accountModel.updateOne(
             { _id: accountId },
             {
                 $set: {
                     status: 'authenticating',
-                    'sessionData.authState': 'pending',
-                    'sessionData.sessionValid': false,
-                    'sessionData.isAuthenticated': false,
+                    'sessionData.authState': 'needs_qr',
                 },
             },
         );
+    }
+
+    /** @deprecated use markAccountNeedsQr — kept for compatibility */
+    async markAccountAwaitingQr(accountId: string): Promise<void> {
+        return this.markAccountNeedsQr(accountId);
     }
 
     async ensureClientId(accountId: string, userId: string, clientId: string): Promise<void> {

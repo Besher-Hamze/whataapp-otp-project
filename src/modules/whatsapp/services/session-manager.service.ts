@@ -184,6 +184,10 @@ export class SessionManagerService implements OnModuleInit {
         this.socketClientMap.set(socketId, clientId);
     }
 
+    unmapSocket(socketId: string): void {
+        this.socketClientMap.delete(socketId);
+    }
+
     getClientIdBySocket(socketId: string): string | undefined {
         return this.socketClientMap.get(socketId);
     }
